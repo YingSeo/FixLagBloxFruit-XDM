@@ -1,9 +1,3 @@
---// Blox Fruits - Anti Freeze Map Optimizer
---// Giữ: NPC / Player / Boat / Ship
---// Ẩn: phần map không cần thiết
---// Không Destroy object
---// Chia batch để tránh freeze khi bật
-
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
