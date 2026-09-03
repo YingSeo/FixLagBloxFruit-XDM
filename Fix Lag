@@ -4,24 +4,26 @@ local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
-local BATCH_SIZE = 400
+repeat task.wait() until game:IsLoaded()
 
 local runtime = Workspace:FindFirstChild("MrDonRuntime")
 
-if not runtime then
-    runtime = Instance.new("Folder")
-    runtime.Name = "MrDonRuntime"
-    runtime.Parent = Workspace
+if runtime then
+    runtime:Destroy()
 end
 
+runtime = Instance.new("Folder")
+runtime.Name = "MrDonRuntime"
+runtime.Parent = Workspace
+
 local hidden = {}
-local protected = {}
+local protectedCache = {}
 
 local function lower(name)
     return string.lower(name or "")
 end
 
-local function isBoatName(name)
+local function hasBoatName(name)
     name = lower(name)
 
     return name:find("boat", 1, true)
@@ -31,66 +33,156 @@ local function isBoatName(name)
         or name:find("sailboat", 1, true)
 end
 
-local function isProtectedModel(obj)
-    if not obj:IsA("Model") then
-        return false
-    end
+local function isCharacterModel(obj)
+    return obj
+        and obj:IsA("Model")
+        and obj:FindFirstChildOfClass("Humanoid") ~= nil
+end
 
-    if obj:FindFirstChildOfClass("Humanoid") then
-        return true
+local function isBoatModel(obj)
+    if not obj or not obj:IsA("Model") then
+        return false
     end
 
     if obj:FindFirstChildWhichIsA("VehicleSeat", true) then
         return true
     end
 
-    if isBoatName(obj.Name) then
+    if hasBoatName(obj.Name) then
+        return true
+    end
+
+    return false
+end
+
+local function isProtectedModel(obj)
+    if not obj or not obj:IsA("Model") then
+        return false
+    end
+
+    if player.Character and obj == player.Character then
+        return true
+    end
+
+    if isCharacterModel(obj) then
+        return true
+    end
+
+    if isBoatModel(obj) then
         return true
     end
 
     local name = lower(obj.Name)
 
-    if name == "npc"
+    return name == "npc"
         or name == "npcs"
         or name == "enemy"
         or name == "enemies"
-        or name == "characters" then
-        return true
-    end
-
-    return false
+        or name == "characters"
+        or name == "boats"
+        or name == "ships"
 end
 
-local function isPlayerCharacter(obj)
-    for _, p in ipairs(Players:GetPlayers()) do
-        local character = p.Character
-
-        if character and obj == character then
-            return true
-        end
-    end
-
-    return false
-end
-
-local function protectTree(model)
-    if protected[model] then
-        return
-    end
-
-    protected[model] = true
-
-    for _, child in ipairs(model:GetDescendants()) do
-        protected[child] = true
-    end
-end
-
-local function hideObject(obj)
+local function showObject(obj)
     if not obj or not obj.Parent then
         return
     end
 
-    if hidden[obj] then
+    if obj:IsA("BasePart") then
+        obj.LocalTransparencyModifier = 0
+        obj.CastShadow = true
+
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        obj.Transparency = 0
+
+    elseif obj:IsA("ParticleEmitter")
+        or obj:IsA("Trail")
+        or obj:IsA("Beam")
+        or obj:IsA("Smoke")
+        or obj:IsA("Fire")
+        or obj:IsA("Sparkles") then
+        obj.Enabled = true
+
+    elseif obj:IsA("PointLight")
+        or obj:IsA("SpotLight")
+        or obj:IsA("SurfaceLight") then
+        obj.Enabled = true
+
+    elseif obj:IsA("Highlight") then
+        obj.Enabled = true
+    end
+end
+
+local function showCharacter(character)
+    if not character then
+        return
+    end
+
+    protectedCache[character] = true
+
+    showObject(character)
+
+    for _, obj in ipairs(character:GetDescendants()) do
+        showObject(obj)
+        protectedCache[obj] = true
+    end
+end
+
+local function protectModel(model)
+    if not model then
+        return
+    end
+
+    protectedCache[model] = true
+
+    for _, obj in ipairs(model:GetDescendants()) do
+        protectedCache[obj] = true
+    end
+end
+
+local function isProtected(obj)
+    if not obj then
+        return true
+    end
+
+    if obj == runtime then
+        return true
+    end
+
+    if protectedCache[obj] then
+        return true
+    end
+
+    local character = player.Character
+
+    if character and (obj == character or obj:IsDescendantOf(character)) then
+        protectedCache[obj] = true
+        return true
+    end
+
+    local current = obj
+
+    while current and current ~= Workspace do
+        if current:IsA("Model") then
+            if isCharacterModel(current) or isBoatModel(current) then
+                protectModel(current)
+                return true
+            end
+        end
+
+        current = current.Parent
+    end
+
+    return false
+end
+
+local function hideObject(obj)
+    if not obj or not obj.Parent or hidden[obj] then
+        return
+    end
+
+    if isProtected(obj) then
+        showObject(obj)
         return
     end
 
@@ -100,14 +192,8 @@ local function hideObject(obj)
         obj.LocalTransparencyModifier = 1
         obj.CastShadow = false
 
-    elseif obj:IsA("Decal") then
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
         obj.Transparency = 1
-
-    elseif obj:IsA("Texture") then
-        obj.Transparency = 1
-
-    elseif obj:IsA("SurfaceAppearance") then
-        obj.AlphaMode = Enum.AlphaMode.Overlay
 
     elseif obj:IsA("ParticleEmitter")
         or obj:IsA("Trail")
@@ -127,112 +213,110 @@ local function hideObject(obj)
     end
 end
 
+local character = player.Character
+
+if character then
+    showCharacter(character)
+end
+
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+
+    task.defer(function()
+        showCharacter(newCharacter)
+    end)
+
+    newCharacter.DescendantAdded:Connect(function(obj)
+        task.defer(function()
+            showObject(obj)
+            protectedCache[obj] = true
+        end)
+    end)
+end)
+
 local queue = {}
-
-local function pushChildren(parent)
-    for _, child in ipairs(parent:GetChildren()) do
-        queue[#queue + 1] = child
-    end
-end
-
-for _, root in ipairs(Workspace:GetChildren()) do
-    if root ~= runtime
-        and root ~= Workspace.CurrentCamera
-        and root ~= Workspace.Terrain then
-
-        queue[#queue + 1] = root
-    end
-end
-
 local index = 1
-local active = true
+
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    if obj ~= runtime and not obj:IsDescendantOf(runtime) then
+        queue[#queue + 1] = obj
+    end
+end
 
 task.spawn(function()
-    while active and index <= #queue do
-        local processed = 0
+    local batchSize = 700
 
-        while processed < BATCH_SIZE and index <= #queue do
-            local obj = queue[index]
-            index += 1
-            processed += 1
+    while index <= #queue do
+        local finish = math.min(index + batchSize - 1, #queue)
 
-            if obj and obj.Parent then
+        for i = index, finish do
+            local obj = queue[i]
 
-                if isProtectedModel(obj) or isPlayerCharacter(obj) then
-                    protectTree(obj)
-
-                elseif protected[obj] then
-
+            if obj and obj.Parent and not obj:IsDescendantOf(runtime) then
+                if isProtected(obj) then
+                    showObject(obj)
                 else
                     hideObject(obj)
-                end
-
-                if not protected[obj]
-                    and (obj:IsA("Model") or obj:IsA("Folder")) then
-
-                    pushChildren(obj)
-                elseif obj:IsA("BasePart") then
-                    for _, child in ipairs(obj:GetChildren()) do
-                        queue[#queue + 1] = child
-                    end
                 end
             end
         end
 
-        RunService.Heartbeat:Wait()
-    end
+        index = finish + 1
 
-    active = false
+        if index <= #queue then
+            RunService.Heartbeat:Wait()
+        end
+    end
 end)
 
 Workspace.DescendantAdded:Connect(function(obj)
-    if not active or obj:IsDescendantOf(runtime) then
+    if not obj or not obj.Parent then
+        return
+    end
+
+    if obj:IsDescendantOf(runtime) then
         return
     end
 
     task.defer(function()
-        if not obj or not obj.Parent then
+        if not obj.Parent then
             return
         end
 
-        if isProtectedModel(obj) or isPlayerCharacter(obj) then
-            protectTree(obj)
-        elseif not protected[obj] then
+        if isProtected(obj) then
+            showObject(obj)
+
+            if obj:IsA("Model") then
+                for _, child in ipairs(obj:GetDescendants()) do
+                    showObject(child)
+                    protectedCache[child] = true
+                end
+            end
+        else
             hideObject(obj)
         end
     end)
 end)
 
-player.CharacterAdded:Connect(function(character)
-    protectTree(character)
-end)
-
-if player.Character then
-    protectTree(player.Character)
-end
-
-local floor = runtime:FindFirstChild("WaterFloor")
-
-if not floor then
-    floor = Instance.new("Part")
-    floor.Name = "WaterFloor"
-    floor.Size = Vector3.new(8192, 2, 8192)
-    floor.Anchored = true
-    floor.CanCollide = true
-    floor.CanTouch = false
-    floor.CanQuery = true
-    floor.Transparency = 1
-    floor.Parent = runtime
-end
+local floor = Instance.new("Part")
+floor.Name = "InvisibleWaterFloor"
+floor.Size = Vector3.new(8192, 2, 8192)
+floor.Anchored = true
+floor.CanCollide = true
+floor.CanTouch = false
+floor.CanQuery = true
+floor.Transparency = 1
+floor.CastShadow = false
+floor.Parent = runtime
 
 local function updateFloor()
-    local character = player.Character
+    local currentCharacter = player.Character
 
-    if not character then
+    if not currentCharacter then
         return
     end
 
-    local root = character:FindFirstChild("HumanoidRootPart")
+    local root = currentCharacter:FindFirstChild("HumanoidRootPart")
 
     if not root then
         return
@@ -247,29 +331,47 @@ end
 
 RunService.Heartbeat:Connect(updateFloor)
 
+local playerGui = player:WaitForChild("PlayerGui")
+
+local oldGui = playerGui:FindFirstChild("MrDonFPS")
+
+if oldGui then
+    oldGui:Destroy()
+end
+
 local gui = Instance.new("ScreenGui")
 gui.Name = "MrDonFPS"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-gui.DisplayOrder = 1000000
+gui.DisplayOrder = 2147483647
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Parent = player:WaitForChild("PlayerGui")
+gui.Parent = playerGui
 
 local box = Instance.new("Frame")
-box.Size = UDim2.fromOffset(110, 36)
-box.Position = UDim2.new(1, -120, 0, 10)
+box.Size = UDim2.fromOffset(90, 32)
+box.Position = UDim2.fromOffset(8, 8)
 box.BackgroundTransparency = 0.25
 box.BorderSizePixel = 0
+box.Rotation = 0
+box.ZIndex = 999999
 box.Parent = gui
 
-local fps = Instance.new("TextLabel")
-fps.Size = UDim2.fromScale(1, 1)
-fps.BackgroundTransparency = 1
-fps.Text = "FPS: --"
-fps.TextScaled = true
-fps.Font = Enum.Font.GothamBold
-fps.TextColor3 = Color3.new(1, 1, 1)
-fps.Parent = box
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 6)
+corner.Parent = box
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.fromScale(1, 1)
+label.BackgroundTransparency = 1
+label.Text = "FPS: --"
+label.TextSize = 17
+label.Font = Enum.Font.GothamBold
+label.TextColor3 = Color3.new(1, 1, 1)
+label.TextXAlignment = Enum.TextXAlignment.Center
+label.TextYAlignment = Enum.TextYAlignment.Center
+label.Rotation = 0
+label.ZIndex = 1000000
+label.Parent = box
 
 local frames = 0
 local elapsed = 0
@@ -279,17 +381,10 @@ RunService.RenderStepped:Connect(function(dt)
     elapsed += dt
 
     if elapsed >= 0.5 then
-        fps.Text = "FPS: " .. math.floor(frames / elapsed + 0.5)
+        label.Text = "FPS: " .. tostring(math.floor(frames / elapsed + 0.5))
         frames = 0
         elapsed = 0
     end
 end)
 
-if Workspace.Terrain then
-    Workspace.Terrain.WaterTransparency = 1
-    Workspace.Terrain.WaterReflectance = 0
-    Workspace.Terrain.WaterWaveSize = 0
-    Workspace.Terrain.WaterWaveSpeed = 0
-end
-
-print("FULL INVISIBLE MAP: ON")
+print("MrDon Optimizer ON")
