@@ -1,47 +1,59 @@
--- [[ MrDon - Ultimate Client Optimizer (Global Water Walk - AutoFarm Friendly) ]]
-local Plr      = game:GetService("Players")
-local WS       = game:GetService("Workspace")
-local Lgt      = game:GetService("Lighting")
-local Run      = game:GetService("RunService")
-local UIS      = game:GetService("UserInputService")
-local CoreGui  = game:GetService("CoreGui")
-local TS       = game:GetService("TeleportService")
+local Plr     = game:GetService("Players")
+local WS      = game:GetService("Workspace")
+local Lgt     = game:GetService("Lighting")
+local Run     = game:GetService("RunService")
+local UIS     = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 
 repeat task.wait() until game:IsLoaded()
 
 local LP    = Plr.LocalPlayer
 local BLACK = Color3.fromRGB(0,0,0)
+local UGLY  = Color3.fromRGB(80,60,40)
 
 local function getGuiParent()
-    local ok, res = pcall(function() return CoreGui end)
-    if ok and res then return res end
-    return LP:WaitForChild("PlayerGui", 10)
+    local ok,res = pcall(function() return CoreGui end)
+    return (ok and res) or LP:WaitForChild("PlayerGui",10)
 end
-
-local targetParent = getGuiParent()
+local GUI = getGuiParent()
 
 local VFX = {
-    ParticleEmitter=1, Beam=1, Trail=1,
-    Fire=1, Smoke=1, Sparkles=1,
-    SelectionBox=1, SelectionSphere=1,
+    ParticleEmitter=1,Beam=1,Trail=1,
+    Fire=1,Smoke=1,Sparkles=1,
+    SelectionBox=1,SelectionSphere=1,
 }
 local LFX = {
-    ColorCorrectionEffect=1, BloomEffect=1, BlurEffect=1,
-    SunRaysEffect=1, DepthOfFieldEffect=1, Sky=1, Atmosphere=1,
+    ColorCorrectionEffect=1,BloomEffect=1,BlurEffect=1,
+    SunRaysEffect=1,DepthOfFieldEffect=1,Sky=1,Atmosphere=1,
 }
 local KEEP = {
-    enemies=1, enemy=1, characters=1, character=1,
-    npcs=1, npc=1, boats=1, boat=1, ships=1, ship=1,
+    enemies=1,enemy=1,characters=1,character=1,
+    npcs=1,npc=1,boats=1,boat=1,ships=1,ship=1,
 }
-local SPECIAL = { frozendimension=1, prehistoricisland=1, kitsuneisland=1 }
+local SPECIAL = {frozendimension=1,prehistoricisland=1,kitsuneisland=1}
+
+local SEA_W   = {"seabeast","terroshark","shark","leviathan","seamonster","seamob","krabbe","krabben"}
+local HAKI_W  = {"aura","haki","kenbun","observe","kenbunshoku","v2effect","v3effect","v4effect"}
+local WATER_W = {"water","ocean","sea","wave"}
+local OVL_W   = {
+    "v4vignette","racevignette","screenvignette","darkscreenvignette",
+    "blackscreenoverlay","fogoverlay","mistoverlay","terrosharkscreen",
+    "seabeastscreen","cinematicoverlay","cutsceneoverlay",
+}
+local DMG_W   = {
+    "damageindicator","floatingdamagetext","combatdamagetext","hitdamagepopup",
+}
 
 local function norm(s) return s:lower():gsub("[^%w]","") end
 
-local function hasWord(s, words)
+local function hasWord(s,words)
     local n = norm(s)
     for i=1,#words do if n:find(words[i],1,true) then return true end end
     return false
 end
+
+local function safeKill(o) pcall(function() o:Destroy() end) end
+local function safeSet(o,k,v) pcall(function() o[k]=v end) end
 
 local function isBoat(o)
     if not o:IsA("Model") then return false end
@@ -51,9 +63,8 @@ local function isBoat(o)
     return o:FindFirstChildWhichIsA("VehicleSeat",true) ~= nil
 end
 
-local SEA_W = {"seabeast","terroshark","shark","leviathan","seamonster","seamob","krabbe","krabben"}
 local function isSeaMob(o)
-    return o:IsA("Model") and hasWord(o.Name, SEA_W)
+    return o:IsA("Model") and hasWord(o.Name,SEA_W)
 end
 
 local function isProtected(o)
@@ -84,10 +95,7 @@ local function inProtected(o)
     return false
 end
 
-local function safeKill(o) pcall(function() o:Destroy() end) end
-local function safeSet(o,k,v) pcall(function() o[k]=v end) end
-
--- ── LIGHTING OPTIMIZATION ─────────────────────────────────────
+-- ── LIGHTING ─────────────────────────────────────────────────
 for cls in next,LFX do
     local o = Lgt:FindFirstChildOfClass(cls)
     if o then safeKill(o) end
@@ -102,44 +110,173 @@ Lgt.OutdoorAmbient = Color3.fromRGB(178,178,178)
 
 Lgt.ChildAdded:Connect(function(o)
     if LFX[o.ClassName] then
-        task.delay(0, function() if o.Parent then safeKill(o) end end)
+        task.defer(function() if o.Parent then safeKill(o) end end)
     end
 end)
 
--- ── WATER NUKE ───────────────────────────────────────────────
-local WATER_W = {"water","ocean","sea","wave"}
+-- ── WATER → SOLID FLOOR (Core Logic) ─────────────────────────
+--[[
+    Chiến lược:
+    1. Terrain: replace toàn bộ vùng Water bằng SmoothPlastic
+       dùng ReadVoxels/WriteVoxels để giữ địa hình, chỉ đổi material
+    2. Invisible Part sàn Y=0 toàn cầu: fallback đảm bảo 100%
+    3. Disable HumanoidStateType.Swimming vĩnh viễn trên LP
+    4. Force Humanoid ra khỏi Swimming state mỗi frame nếu lọt xuống
+]]
 
-local function isWaterPart(o)
-    return o:IsA("BasePart") and hasWord(o.Name, WATER_W) and not inProtected(o)
+local FLOOR_Y       = 0
+local FLOOR_NAME    = "__MrDonSolidSea"
+local VOXEL_SIZE    = 4
+local FILL_MATERIAL = Enum.Material.SmoothPlastic
+
+local function buildSolidFloor()
+    if WS:FindFirstChild(FLOOR_NAME) then return end
+    local floor = Instance.new("Part")
+    floor.Name             = FLOOR_NAME
+    floor.Size             = Vector3.new(8000, 4, 8000)
+    floor.CFrame           = CFrame.new(0, FLOOR_Y - 2, 0)
+    floor.Transparency     = 1
+    floor.Anchored         = true
+    floor.CanCollide       = true
+    floor.CanTouch         = false
+    floor.CanQuery         = false
+    floor.CastShadow       = false
+    floor.Massless         = true
+    floor.Material         = FILL_MATERIAL
+    floor.CollisionGroupId = 0
+    floor.Parent           = WS
 end
 
-task.spawn(function()
-    local t = WS:FindFirstChildOfClass("Terrain")
-    if t then
-        safeSet(t,"Decoration",false)
-        safeSet(t,"WaterWaveSize",0)
-        safeSet(t,"WaterWaveSpeed",0)
-        safeSet(t,"WaterReflectance",0)
-        safeSet(t,"WaterTransparency",1)
-        local cl = t:FindFirstChildOfClass("Clouds")
-        if cl then safeKill(cl) end
-        pcall(function()
-            local ext = WS.Terrain.MaxExtents
-            WS.Terrain:FillBlock(CFrame.new(ext.CFrame.Position), ext.Size, Enum.Material.Air)
-        end)
-    end
+local function replaceTerrainWater()
+    local terrain = WS:FindFirstChildOfClass("Terrain")
+    if not terrain then return end
+
+    safeSet(terrain,"Decoration",false)
+    safeSet(terrain,"WaterWaveSize",0)
+    safeSet(terrain,"WaterWaveSpeed",0)
+    safeSet(terrain,"WaterReflectance",0)
+    safeSet(terrain,"WaterTransparency",1)
+
+    local cl = terrain:FindFirstChildOfClass("Clouds")
+    if cl then safeKill(cl) end
+
+    -- ReadVoxels toàn bộ extent của map, swap Water → SmoothPlastic
+    pcall(function()
+        local ext = terrain.MaxExtents
+        local minP = ext.Min
+        local maxP = ext.Max
+
+        -- Clamp vùng scan hợp lý tránh timeout
+        local scanMin = Vector3.new(
+            math.max(minP.X, -4000),
+            math.max(minP.Y, -200),
+            math.max(minP.Z, -4000)
+        )
+        local scanMax = Vector3.new(
+            math.min(maxP.X,  4000),
+            math.min(maxP.Y,  50),
+            math.min(maxP.Z,  4000)
+        )
+
+        local region = Region3.new(scanMin, scanMax):ExpandToGrid(VOXEL_SIZE)
+        local mats, occs = terrain:ReadVoxels(region, VOXEL_SIZE)
+
+        local sx,sy,sz = mats.Size.X, mats.Size.Y, mats.Size.Z
+        local changed  = false
+
+        for x=1,sx do
+            for y=1,sy do
+                for z=1,sz do
+                    if mats[x][y][z] == Enum.Material.Water then
+                        mats[x][y][z] = Enum.Material.Air
+                        occs[x][y][z] = 0
+                        changed = true
+                    end
+                end
+            end
+            -- yield mỗi slice X để không lag
+            if x % 10 == 0 then task.wait() end
+        end
+
+        if changed then
+            terrain:WriteVoxels(region, VOXEL_SIZE, mats, occs)
+        end
+    end)
+end
+
+-- Xóa BasePart tên chứa water/ocean/sea/wave
+local function nukeWaterParts()
     local d = WS:GetDescendants()
     for i=1,#d do
-        if d[i] and d[i].Parent and isWaterPart(d[i]) then safeKill(d[i]) end
+        local o = d[i]
+        if o and o.Parent and o:IsA("BasePart")
+        and hasWord(o.Name,WATER_W) and not inProtected(o) then
+            safeKill(o)
+        end
         if i%100==0 then task.wait() end
     end
-end)
+end
 
-WS.DescendantAdded:Connect(function(o)
-    task.delay(0, function()
-        if o and o.Parent and isWaterPart(o) then safeKill(o) end
+-- Disable Swimming state + force out mỗi khi nhân vật spawn
+local function disableSwimming(char)
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid",5)
+    if not hum then return end
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+    end)
+end
+
+-- Chạy toàn bộ water pipeline
+task.spawn(function()
+    buildSolidFloor()
+    replaceTerrainWater()
+    nukeWaterParts()
+    if LP.Character then disableSwimming(LP.Character) end
+    LP.CharacterAdded:Connect(function(char)
+        task.spawn(disableSwimming, char)
     end)
 end)
+
+-- Block water part spawn muộn
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if not (o and o.Parent) then return end
+        if o:IsA("BasePart") and hasWord(o.Name,WATER_W) and not inProtected(o) then
+            safeKill(o)
+        end
+    end)
+end)
+
+-- Failsafe RenderStepped: nếu nhân vật vẫn lọt xuống nước → kéo lên
+do
+    local SNAP_Y   = FLOOR_Y + 3.2
+    local SNAP_LIM = 0.8
+
+    Run.RenderStepped:Connect(function()
+        local char = LP.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum  = char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum or hum.Health <= 0 then return end
+
+        local state = hum:GetState()
+        if state == Enum.HumanoidStateType.Swimming
+        or root.Position.Y < FLOOR_Y + SNAP_LIM then
+            pcall(function()
+                local _,ry,_ = root.CFrame:ToEulerAnglesYXZ()
+                root.CFrame  = CFrame.new(
+                    root.Position.X, SNAP_Y, root.Position.Z
+                ) * CFrame.Angles(0,ry,0)
+            end)
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end)
+        end
+    end)
+end
+-- ─────────────────────────────────────────────────────────────
 
 -- ── VFX PURGE ────────────────────────────────────────────────
 local function purgeCamera()
@@ -160,7 +297,7 @@ task.spawn(function()
 end)
 
 WS.DescendantAdded:Connect(function(o)
-    task.delay(0, function()
+    task.defer(function()
         if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then
             safeKill(o)
         end
@@ -189,41 +326,115 @@ task.spawn(function()
     end
 end)
 
--- ── OVERLAY STRIP ────────────────────────────────────────────
-local OVL_W = {
-    "v4vignette","racevignette","screenvignette","darkscreenvignette",
-    "blackscreenoverlay","fogoverlay","mistoverlay","terrosharkscreen",
-    "seabeastscreen","cinematicoverlay","cutsceneoverlay"
-}
+-- ── BOAT PAINT ────────────────────────────────────────────────
+local paintedBoats = {}
 
+local function paintBoat(model)
+    if paintedBoats[model] then return end
+    paintedBoats[model] = true
+    task.spawn(function()
+        for _,o in ipairs(model:GetDescendants()) do
+            if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
+                safeSet(o,"Color",BLACK)
+                safeSet(o,"Material",Enum.Material.SmoothPlastic)
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                safeSet(o,"Color3",BLACK)
+                safeSet(o,"Transparency",1)
+            end
+        end
+        model.DescendantAdded:Connect(function(o)
+            task.defer(function()
+                if not (o and o.Parent) then return end
+                if o:IsA("BasePart") or o:IsA("MeshPart") then
+                    safeSet(o,"Color",BLACK)
+                    safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                elseif o:IsA("Decal") or o:IsA("Texture") then
+                    safeSet(o,"Color3",BLACK)
+                    safeSet(o,"Transparency",1)
+                end
+            end)
+        end)
+    end)
+end
+
+task.spawn(function()
+    for _,o in ipairs(WS:GetDescendants()) do
+        if isBoat(o) then paintBoat(o) end
+    end
+end)
+
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if o and o.Parent and isBoat(o) then paintBoat(o) end
+    end)
+end)
+
+-- ── SEA MOB UGLY + STRIP VFX ─────────────────────────────────
+local uglyMobs = {}
+
+local function uglyMob(model)
+    if uglyMobs[model] then return end
+    uglyMobs[model] = true
+    task.spawn(function()
+        for _,o in ipairs(model:GetDescendants()) do
+            if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
+                safeSet(o,"Color",UGLY)
+                safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                safeSet(o,"Reflectance",0)
+                safeSet(o,"CastShadow",false)
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                safeSet(o,"Transparency",1)
+            elseif VFX[o.ClassName] then
+                safeKill(o)
+            elseif o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
+                safeSet(o,"Enabled",false)
+            end
+        end
+        model.DescendantAdded:Connect(function(o)
+            task.defer(function()
+                if not (o and o.Parent) then return end
+                if VFX[o.ClassName] then safeKill(o)
+                elseif o:IsA("BasePart") or o:IsA("MeshPart") then
+                    safeSet(o,"Color",UGLY)
+                    safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                    safeSet(o,"CastShadow",false)
+                end
+            end)
+        end)
+    end)
+end
+
+task.spawn(function()
+    for _,o in ipairs(WS:GetDescendants()) do
+        if isSeaMob(o) then uglyMob(o) end
+    end
+end)
+
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if o and o.Parent and isSeaMob(o) then uglyMob(o) end
+    end)
+end)
+
+-- ── OVERLAY STRIP ────────────────────────────────────────────
 local function isUserMenuGui(o)
     local root = o
-    while root.Parent and root.Parent ~= targetParent and root.Parent ~= game do
+    while root.Parent and root.Parent ~= GUI and root.Parent ~= game do
         root = root.Parent
     end
-    
-    local rootName = norm(root.Name)
-    if rootName:sub(1,2) == "__" 
-    or rootName:find("menu",1,true) 
-    or rootName:find("hub",1,true) 
-    or rootName:find("ui",1,true)
-    or rootName:find("gui",1,true)
-    or rootName:find("rayfield",1,true)
-    or rootName:find("orion",1,true)
-    or rootName:find("fluent",1,true)
-    or rootName:find("kavo",1,true)
-    or rootName:find("redz",1,true) then
-        return true
-    end
-    return false
+    local n = norm(root.Name)
+    return n:sub(1,2)=="__" or n:find("menu",1,true) or n:find("hub",1,true)
+        or n:find("ui",1,true) or n:find("gui",1,true)
+        or n:find("rayfield",1,true) or n:find("orion",1,true)
+        or n:find("fluent",1,true) or n:find("kavo",1,true)
+        or n:find("redz",1,true)
 end
 
 local function isOverlay(o)
     if isUserMenuGui(o) then return false end
-    if not (o:IsA("Frame") or o:IsA("ImageLabel") or o:IsA("ScreenGui") or o:IsA("ImageButton")) then 
-        return false 
-    end
-    return hasWord(o.Name, OVL_W)
+    if not (o:IsA("Frame") or o:IsA("ImageLabel")
+    or o:IsA("ScreenGui") or o:IsA("ImageButton")) then return false end
+    return hasWord(o.Name,OVL_W)
 end
 
 local function stripOverlay(gui)
@@ -237,10 +448,10 @@ local function stripOverlay(gui)
     end
 end
 
-if targetParent then
-    stripOverlay(targetParent)
-    targetParent.DescendantAdded:Connect(function(o)
-        task.delay(0, function()
+if GUI then
+    stripOverlay(GUI)
+    GUI.DescendantAdded:Connect(function(o)
+        task.defer(function()
             if o and o.Parent and isOverlay(o) then
                 safeSet(o,"Visible",false)
                 safeSet(o,"BackgroundTransparency",1)
@@ -249,38 +460,35 @@ if targetParent then
         end)
     end)
     task.spawn(function()
-        while true do task.wait(3) stripOverlay(targetParent) end
+        while true do task.wait(3) stripOverlay(GUI) end
     end)
 end
 
 -- ── DAMAGE GUI STRIP ─────────────────────────────────────────
-local DMG_W = {
-    "damageindicator","floatingdamagetext","combatdamagetext","hitdamagepopup"
-}
-
-local function isDmgGui(o) 
+local function isDmgGui(o)
     if isUserMenuGui(o) then return false end
-    return hasWord(o.Name, DMG_W) 
+    return hasWord(o.Name,DMG_W)
 end
 
 local function killDmgGui(o)
-    if isDmgGui(o) then
-        if o:IsA("BillboardGui") or o:IsA("ScreenGui")
-        or o:IsA("SurfaceGui") or o:IsA("TextLabel")
-        or o:IsA("Frame") or o:IsA("ImageLabel") then
-            safeSet(o,"Enabled",false); safeSet(o,"Visible",false)
-        end
+    if not isDmgGui(o) then return end
+    if o:IsA("BillboardGui") or o:IsA("ScreenGui")
+    or o:IsA("SurfaceGui")   or o:IsA("TextLabel")
+    or o:IsA("Frame")        or o:IsA("ImageLabel") then
+        safeSet(o,"Enabled",false)
+        safeSet(o,"Visible",false)
     end
 end
 
-if targetParent then
-    for _,o in ipairs(targetParent:GetDescendants()) do killDmgGui(o) end
-    targetParent.DescendantAdded:Connect(function(o)
-        task.delay(0, function() if o and o.Parent then killDmgGui(o) end end)
+if GUI then
+    for _,o in ipairs(GUI:GetDescendants()) do killDmgGui(o) end
+    GUI.DescendantAdded:Connect(function(o)
+        task.defer(function() if o and o.Parent then killDmgGui(o) end end)
     end)
 end
+
 WS.DescendantAdded:Connect(function(o)
-    task.delay(0, function()
+    task.defer(function()
         if o and o.Parent and isDmgGui(o) then
             if o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
                 safeSet(o,"Enabled",false)
@@ -290,11 +498,9 @@ WS.DescendantAdded:Connect(function(o)
 end)
 
 -- ── HAKI + HIDE OTHER PLAYERS ────────────────────────────────
-local HAKI_W = {"aura","haki","kenbun","observe","kenbunshoku","v2effect","v3effect","v4effect"}
-
 local function isHakiObj(o)
     if (o:IsA("Highlight") or o:IsA("BillboardGui")) and not inProtected(o) then return true end
-    return hasWord(o.Name, HAKI_W)
+    return hasWord(o.Name,HAKI_W)
 end
 
 local function stripHaki(char)
@@ -303,7 +509,7 @@ local function stripHaki(char)
         if isHakiObj(o) then safeKill(o) end
     end
     char.DescendantAdded:Connect(function(o)
-        task.delay(0, function()
+        task.defer(function()
             if o and o.Parent and isHakiObj(o) then safeKill(o) end
         end)
     end)
@@ -320,7 +526,9 @@ local function hideChar(char)
                 safeSet(o,"Transparency",1)
             elseif o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
                 safeSet(o,"Enabled",false)
-            elseif VFX[o.ClassName] then safeKill(o) end
+            elseif VFX[o.ClassName] then
+                safeKill(o)
+            end
         end
     end)
 end
@@ -328,54 +536,18 @@ end
 local function hookPlayer(plr)
     if plr == LP then return end
     local function onChar(char)
-        task.wait(0.2); stripHaki(char); hideChar(char)
+        task.wait(0.2)
+        stripHaki(char)
+        hideChar(char)
     end
-    if plr.Character then task.spawn(onChar, plr.Character) end
+    if plr.Character then task.spawn(onChar,plr.Character) end
     plr.CharacterAdded:Connect(onChar)
 end
 
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── INVISIBLE GLOBAL WATER FLOOR (FIX MOON JUMP & AUTO-FARM) ──
-local function setupGlobalWaterFloor()
-    local floorName = "__GlobalWaterFloor"
-    if WS:FindFirstChild(floorName) then return end
-
-    -- Tạo một sàn duy nhất cực khổng lồ bao phủ toàn bộ vùng biển
-    local floor = Instance.new("Part")
-    floor.Name = floorName
-    floor.Size = Vector3.new(500000, 5, 500000)
-    floor.Position = Vector3.new(0, -2.5, 0) -- Mặt trên sẽ nằm chính xác ở Y = 0
-    floor.Transparency = 1
-    floor.Anchored = true
-    floor.CanCollide = true
-    floor.CastShadow = false
-    
-    -- QUAN TRỌNG CHO AUTO-FARM: Tắt touch và query để raycast/tween của bot đi xuyên qua không bị kẹt
-    floor.CanTouch = false
-    floor.CanQuery = false
-    floor.Massless = true
-    floor.Material = Enum.Material.SmoothPlastic
-    floor.Parent = WS
-
-    -- Tắt trạng thái bơi lội để auto-farm bay ngang vùng nước cũ không bị khựng
-    local function fixHumanoid(char)
-        local hum = char:WaitForChild("Humanoid", 5)
-        if hum then
-            pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-            end)
-        end
-    end
-
-    if LP.Character then task.spawn(fixHumanoid, LP.Character) end
-    LP.CharacterAdded:Connect(fixHumanoid)
-end
-
-setupGlobalWaterFloor()
-
--- ── CAMERA ANTI-SHAKE ─────────────────────────────────────────
+-- ── CAMERA ANTI-SHAKE ────────────────────────────────────────
 do
     local prevLook = Vector3.new(0,0,-1)
     Run.RenderStepped:Connect(function()
@@ -393,65 +565,59 @@ end
 
 -- ── FPS DISPLAY BAR ──────────────────────────────────────────
 task.spawn(function()
-    if not targetParent then return end
-
-    local old = targetParent:FindFirstChild("__MrDonFPS")
+    if not GUI then return end
+    local old = GUI:FindFirstChild("__MrDonFPS")
     if old then safeKill(old) end
 
     local sg = Instance.new("ScreenGui")
-    sg.Name            = "__MrDonFPS"
-    sg.ResetOnSpawn    = false
-    sg.DisplayOrder    = 999
-    sg.IgnoreGuiInset  = true
-
-    local pcallOk = pcall(function() sg.Parent = targetParent end)
-    if not pcallOk then
-        sg.Parent = LP:WaitForChild("PlayerGui", 10)
-    end
+    sg.Name           = "__MrDonFPS"
+    sg.ResetOnSpawn   = false
+    sg.DisplayOrder   = 999
+    sg.IgnoreGuiInset = true
+    pcall(function() sg.Parent = GUI end)
 
     local frame = Instance.new("Frame")
-    frame.Size                = UDim2.new(0, 110, 0, 34)
-    frame.Position            = UDim2.new(1, -118, 0, 10)
-    frame.BackgroundColor3    = Color3.fromRGB(15, 15, 20)
+    frame.Size                   = UDim2.new(0,110,0,34)
+    frame.Position               = UDim2.new(1,-118,0,10)
+    frame.BackgroundColor3       = Color3.fromRGB(15,15,20)
     frame.BackgroundTransparency = 0.2
-    frame.BorderSizePixel     = 0
-    frame.Active              = true
-    frame.Parent              = sg
+    frame.BorderSizePixel        = 0
+    frame.Active                 = true
+    frame.Parent                 = sg
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
+    corner.CornerRadius = UDim.new(0,8)
     corner.Parent = frame
 
     local bar = Instance.new("Frame")
-    bar.Size              = UDim2.new(0, 4, 0, 20)
-    bar.Position          = UDim2.new(0, 8, 0.5, -10)
-    bar.BackgroundColor3 = Color3.fromRGB(0, 220, 120)
+    bar.Size             = UDim2.new(0,4,0,20)
+    bar.Position         = UDim2.new(0,8,0.5,-10)
+    bar.BackgroundColor3 = Color3.fromRGB(0,220,120)
     bar.BorderSizePixel  = 0
-    bar.Parent            = frame
+    bar.Parent           = frame
 
     local barCorner = Instance.new("UICorner")
-    barCorner.CornerRadius = UDim.new(1, 0)
+    barCorner.CornerRadius = UDim.new(1,0)
     barCorner.Parent = bar
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size                   = UDim2.new(1, -20, 1, 0)
-    lbl.Position               = UDim2.new(0, 20, 0, 0)
+    lbl.Size                   = UDim2.new(1,-20,1,0)
+    lbl.Position               = UDim2.new(0,20,0,0)
     lbl.BackgroundTransparency = 1
-    lbl.TextColor3             = Color3.fromRGB(240, 240, 240)
+    lbl.TextColor3             = Color3.fromRGB(240,240,240)
     lbl.Font                   = Enum.Font.GothamBold
     lbl.TextSize               = 13
     lbl.TextXAlignment         = Enum.TextXAlignment.Left
     lbl.Text                   = "FPS: --"
     lbl.Parent                 = frame
 
-    local dragging = false
-    local dragStart, startPos
-
+    local dragging,dragStart,startPos = false,nil,nil
     frame.InputBegan:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging  = true
             dragStart = inp.Position
-            startPos = frame.Position
+            startPos  = frame.Position
             inp.Changed:Connect(function()
                 if inp.UserInputState == Enum.UserInputState.End then
                     dragging = false
@@ -461,117 +627,34 @@ task.spawn(function()
     end)
 
     UIS.InputChanged:Connect(function(inp)
-        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
-            local delta = inp.Position - dragStart
+        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
+        or inp.UserInputType == Enum.UserInputType.Touch) then
+            local d = inp.Position - dragStart
             frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
             )
         end
     end)
 
-    local frameCount = 0
-    local accTime = 0
-    local HI  = Color3.fromRGB(0, 220, 120)
-    local MID = Color3.fromRGB(255, 180, 0)
-    local LO  = Color3.fromRGB(255, 60, 60)
+    local fc,at = 0,0
+    local HI  = Color3.fromRGB(0,220,120)
+    local MID = Color3.fromRGB(255,180,0)
+    local LO  = Color3.fromRGB(255,60,60)
 
     Run.RenderStepped:Connect(function(dt)
-        frameCount += 1
-        accTime += dt
-        if accTime >= 0.5 then
-            local fps = math.round(frameCount / accTime)
-            lbl.Text = "FPS: " .. tostring(fps)
-            bar.BackgroundColor3 = (fps >= 50 and HI) or (fps >= 30 and MID) or LO
-            frameCount = 0
-            accTime = 0
+        fc += 1; at += dt
+        if at >= 0.5 then
+            local fps = math.round(fc/at)
+            lbl.Text = "FPS: "..fps
+            bar.BackgroundColor3 = (fps>=50 and HI) or (fps>=30 and MID) or LO
+            fc,at = 0,0
         end
     end)
 end)
 
--- ── REJOIN BUTTON GUI ──────────────────────────────────────────
-task.spawn(function()
-    if not targetParent then return end
-
-    local old = targetParent:FindFirstChild("__MrDonRejoin")
-    if old then safeKill(old) end
-
-    local sg = Instance.new("ScreenGui")
-    sg.Name            = "__MrDonRejoin"
-    sg.ResetOnSpawn    = false
-    sg.DisplayOrder    = 999
-    sg.IgnoreGuiInset  = true
-
-    local pcallOk = pcall(function() sg.Parent = targetParent end)
-    if not pcallOk then
-        sg.Parent = LP:WaitForChild("PlayerGui", 10)
-    end
-
-    local btn = Instance.new("TextButton")
-    btn.Name                   = "RejoinButton"
-    btn.Size                   = UDim2.new(0, 85, 0, 32)
-    btn.Position               = UDim2.new(1, -100, 1, -40)
-    btn.BackgroundColor3       = Color3.fromRGB(15, 15, 20)
-    btn.BackgroundTransparency = 0.25
-    btn.BorderSizePixel        = 0
-    btn.Text                   = "Rejoin"
-    btn.TextColor3             = Color3.fromRGB(240, 240, 240)
-    btn.Font                   = Enum.Font.GothamBold
-    btn.TextSize               = 13
-    btn.Active                 = true
-    btn.Parent                 = sg
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(0, 220, 120)
-    stroke.Thickness = 1
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent = btn
-
-    local isRejoining = false
-
-    TS.TeleportInitFailed:Connect(function(player)
-        if player == LP then
-            btn.Text = "Retry..."
-            pcall(function() TS:Teleport(game.PlaceId, LP) end)
-        end
-    end)
-
-    btn.MouseButton1Click:Connect(function()
-        if isRejoining then return end
-        isRejoining = true
-        btn.Text = "Joining..."
-
-        task.spawn(function()
-            local ok = pcall(function()
-                if #Plr:GetPlayers() <= 1 then
-                    TS:Teleport(game.PlaceId, LP)
-                else
-                    TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
-                end
-            end)
-
-            if not ok then
-                btn.Text = "Fallback..."
-                pcall(function() TS:Teleport(game.PlaceId, LP) end)
-            end
-
-            task.wait(4)
-            if isRejoining then
-                btn.Text = "Force Join"
-                pcall(function() TS:Teleport(game.PlaceId, LP) end)
-                task.wait(2)
-                isRejoining = false
-                btn.Text = "Rejoin"
-            end
-        end)
-    end)
-end)
-
+-- ── FPS UNLOCK ───────────────────────────────────────────────
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[MrDon] Client script loaded successfully. (Global Water Floor V3)")
+print("[MrDon] Loaded — Solid Sea Floor | Delta X | Blox Fruits")
