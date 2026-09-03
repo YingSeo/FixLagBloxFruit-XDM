@@ -1,252 +1,164 @@
-local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 
-local LocalPlayer = Players.LocalPlayer
+local player = Players.LocalPlayer
+local map = Workspace:FindFirstChild("Map")
 
---------------------------------------------------
--- CONFIG
---------------------------------------------------
-
-local ENABLED = true
-
--- Số object xử lý mỗi lượt.
--- Tăng = nhanh hơn nhưng dễ giật hơn.
--- Giảm = mượt hơn nhưng lâu hơn.
-local BATCH_SIZE = 150
-
--- Nghỉ giữa các batch để Roblox không bị nghẽn CPU
-local BATCH_DELAY = 0.03
-
---------------------------------------------------
--- CACHE
---------------------------------------------------
-
-local protectedModels = {}
-local processed = {}
-
---------------------------------------------------
--- TÌM MODEL CHA
---------------------------------------------------
-
-local function findProtectedModel(obj)
-    local current = obj
-
-    while current and current ~= Workspace do
-        if current:IsA("Model") then
-
-            if current:FindFirstChildOfClass("Humanoid") then
-                return current
-            end
-
-            local name = string.lower(current.Name)
-
-            if string.find(name, "boat", 1, true)
-                or string.find(name, "ship", 1, true) then
-                return current
-            end
-
-            if name == "enemies"
-                or name == "enemy"
-                or name == "npc"
-                or name == "npcs"
-                or name == "characters" then
-                return current
-            end
-
-            -- Thuyền thường có seat
-            if current:FindFirstChildWhichIsA("VehicleSeat", true) then
-                return current
-            end
-        end
-
-        current = current.Parent
-    end
-
-    return nil
+if not map then
+    warn("Không tìm thấy Workspace.Map")
+    return
 end
 
---------------------------------------------------
--- KIỂM TRA OBJECT CÓ ĐƯỢC GIỮ KHÔNG
---------------------------------------------------
+local queue = {}
+local head = 1
+local running = true
 
-local function shouldKeep(obj)
+local BATCH_SIZE = 25
+local DELAY = 0.02
 
-    if not obj then
+local protected = {}
+
+local function lower(v)
+    return string.lower(v or "")
+end
+
+local function isProtectedModel(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
+
+    local name = lower(model.Name)
+
+    if name:find("boat", 1, true)
+        or name:find("ship", 1, true)
+        or name:find("raft", 1, true)
+        or name:find("boat", 1, true) then
         return true
     end
 
-    -- Character người chơi
-    if LocalPlayer.Character
-        and obj:IsDescendantOf(LocalPlayer.Character) then
+    if name == "enemies"
+        or name == "enemy"
+        or name == "npcs"
+        or name == "npc"
+        or name == "characters"
+        or name == "characters" then
         return true
     end
 
-    -- Camera / Terrain
-    if obj.Name == "Camera" or obj == Workspace.Terrain then
+    if model:FindFirstChildOfClass("Humanoid") then
         return true
     end
 
-    -- Đã cache model bảo vệ
-    for model in pairs(protectedModels) do
-        if obj:IsDescendantOf(model) or obj == model then
-            return true
-        end
-    end
-
-    -- Tìm model NPC / Boat / Ship
-    local protected = findProtectedModel(obj)
-
-    if protected then
-        protectedModels[protected] = true
+    if model:FindFirstChildWhichIsA("VehicleSeat", true) then
         return true
     end
 
     return false
 end
 
---------------------------------------------------
--- ẨN OBJECT NHẸ
---------------------------------------------------
-
-local function optimizeObject(obj)
-
-    if not ENABLED then
-        return
+local function isPlayerCharacter(obj)
+    for _, p in ipairs(Players:GetPlayers()) do
+        local character = p.Character
+        if character and obj:IsDescendantOf(character) then
+            return true
+        end
     end
 
-    if processed[obj] then
+    return false
+end
+
+local function hideObject(obj)
+    if not obj or not obj.Parent then
         return
     end
-
-    processed[obj] = true
-
-    -- Không chạm NPC / Player / Boat
-    if shouldKeep(obj) then
-        return
-    end
-
-    ------------------------------------------------
-    -- PART
-    ------------------------------------------------
 
     if obj:IsA("BasePart") then
-        -- LocalTransparencyModifier chỉ ảnh hưởng client
         obj.LocalTransparencyModifier = 1
-
-        -- Chỉ bỏ shadow, không động physics
         obj.CastShadow = false
+        return
+    end
 
-    ------------------------------------------------
-    -- TEXTURE / DECAL
-    ------------------------------------------------
-
-    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+    if obj:IsA("Decal") or obj:IsA("Texture") then
         obj.Transparency = 1
+        return
+    end
 
-    ------------------------------------------------
-    -- PARTICLE / EFFECT
-    ------------------------------------------------
-
-    elseif obj:IsA("ParticleEmitter")
+    if obj:IsA("ParticleEmitter")
         or obj:IsA("Trail")
         or obj:IsA("Beam")
         or obj:IsA("Smoke")
         or obj:IsA("Fire")
         or obj:IsA("Sparkles") then
-
         obj.Enabled = false
-
-    ------------------------------------------------
-    -- LIGHT
-    ------------------------------------------------
-
-    elseif obj:IsA("PointLight")
-        or obj:IsA("SpotLight")
-        or obj:IsA("SurfaceLight") then
-
-        obj.Enabled = false
-
-    ------------------------------------------------
-    -- GUI / HIGHLIGHT
-    ------------------------------------------------
-
-    elseif obj:IsA("BillboardGui")
-        or obj:IsA("SurfaceGui")
-        or obj:IsA("Highlight") then
-
-        obj.Enabled = false
-    end
-end
-
---------------------------------------------------
--- XỬ LÝ THEO BATCH
---------------------------------------------------
-
-local function optimizeWorkspace()
-
-    local descendants = Workspace:GetDescendants()
-    local total = #descendants
-
-    print("Map Optimizer: found", total, "objects")
-
-    local index = 1
-
-    while index <= total and ENABLED do
-
-        local finish = math.min(index + BATCH_SIZE - 1, total)
-
-        for i = index, finish do
-            local obj = descendants[i]
-
-            if obj and obj.Parent then
-                optimizeObject(obj)
-            end
-        end
-
-        index = finish + 1
-
-        -- Nhường frame cho Roblox
-        task.wait(BATCH_DELAY)
-    end
-
-    print("Map Optimizer: finished")
-end
-
---------------------------------------------------
--- OBJECT MỚI SPAWN
---------------------------------------------------
-
-Workspace.DescendantAdded:Connect(function(obj)
-
-    if not ENABLED then
         return
     end
 
-    -- Không xử lý ngay lập tức.
-    -- Đợi 1 frame tránh spike CPU khi nhiều object spawn cùng lúc.
-    task.defer(function()
+    if obj:IsA("PointLight")
+        or obj:IsA("SpotLight")
+        or obj:IsA("SurfaceLight") then
+        obj.Enabled = false
+    end
+end
 
-        if not obj or not obj.Parent then
-            return
-        end
+local function addNode(obj, parentProtected)
+    if not obj or not obj.Parent then
+        return
+    end
 
-        optimizeObject(obj)
-    end)
+    local currentProtected = parentProtected
+
+    if not currentProtected and obj:IsA("Model") then
+        currentProtected = isProtectedModel(obj)
+    end
+
+    if isPlayerCharacter(obj) then
+        currentProtected = true
+    end
+
+    queue[#queue + 1] = {
+        object = obj,
+        protected = currentProtected
+    }
+end
+
+for _, obj in ipairs(map:GetChildren()) do
+    addNode(obj, false)
+end
+
+map.ChildAdded:Connect(function(obj)
+    if running then
+        addNode(obj, false)
+    end
 end)
-
---------------------------------------------------
--- CHẠY
---------------------------------------------------
 
 task.spawn(function()
-    optimizeWorkspace()
+    while running and head <= #queue do
+        local processed = 0
+
+        while processed < BATCH_SIZE and head <= #queue do
+            local item = queue[head]
+            head += 1
+            processed += 1
+
+            local obj = item.object
+
+            if obj and obj.Parent then
+                if not item.protected then
+                    hideObject(obj)
+                end
+
+                if obj:IsA("Folder") or obj:IsA("Model") then
+                    for _, child in ipairs(obj:GetChildren()) do
+                        addNode(child, item.protected)
+                    end
+                end
+            end
+        end
+
+        task.wait(DELAY)
+    end
+
+    running = false
 end)
 
-print("--------------------------------")
-print(" Map Optimizer")
-print(" NPC    : KEEP")
-print(" PLAYER : KEEP")
-print(" BOAT   : KEEP")
-print(" SHIP   : KEEP")
-print(" BATCH  :", BATCH_SIZE)
-print("--------------------------------")
+print("Map optimizer started")
