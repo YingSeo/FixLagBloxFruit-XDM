@@ -31,7 +31,6 @@ local KEEP = {
     npcs=1,npc=1,boats=1,boat=1,ships=1,ship=1,
 }
 local SPECIAL = {frozendimension=1,prehistoricisland=1,kitsuneisland=1}
-
 local SEA_W   = {"seabeast","terroshark","shark","leviathan","seamonster","seamob","krabbe","krabben"}
 local HAKI_W  = {"aura","haki","kenbun","observe","kenbunshoku","v2effect","v3effect","v4effect"}
 local WATER_W = {"water","ocean","sea","wave"}
@@ -40,18 +39,16 @@ local OVL_W   = {
     "blackscreenoverlay","fogoverlay","mistoverlay","terrosharkscreen",
     "seabeastscreen","cinematicoverlay","cutsceneoverlay",
 }
-local DMG_W   = {
+local DMG_W = {
     "damageindicator","floatingdamagetext","combatdamagetext","hitdamagepopup",
 }
 
 local function norm(s) return s:lower():gsub("[^%w]","") end
-
 local function hasWord(s,words)
     local n = norm(s)
     for i=1,#words do if n:find(words[i],1,true) then return true end end
     return false
 end
-
 local function safeKill(o) pcall(function() o:Destroy() end) end
 local function safeSet(o,k,v) pcall(function() o[k]=v end) end
 
@@ -62,22 +59,18 @@ local function isBoat(o)
     or n:find("raft",1,true) or n:find("dinghy",1,true) then return true end
     return o:FindFirstChildWhichIsA("VehicleSeat",true) ~= nil
 end
-
 local function isSeaMob(o)
     return o:IsA("Model") and hasWord(o.Name,SEA_W)
 end
-
 local function isProtected(o)
     if not o:IsA("Model") then return false end
     if o:FindFirstChildOfClass("Humanoid") then return true end
     return isBoat(o) or isSeaMob(o) or SPECIAL[norm(o.Name)] ~= nil
 end
-
 local function keepTree(o)
     if o:IsA("Model") then return isProtected(o) end
     return KEEP[norm(o.Name)] == true
 end
-
 local function hasProtectedChild(o)
     if keepTree(o) then return true end
     for _,c in ipairs(o:GetChildren()) do
@@ -85,7 +78,6 @@ local function hasProtectedChild(o)
     end
     return false
 end
-
 local function inProtected(o)
     local p = o.Parent
     while p and p ~= WS and p ~= game do
@@ -107,108 +99,75 @@ Lgt.Brightness     = 2
 Lgt.ClockTime      = 14
 Lgt.Ambient        = Color3.fromRGB(178,178,178)
 Lgt.OutdoorAmbient = Color3.fromRGB(178,178,178)
-
 Lgt.ChildAdded:Connect(function(o)
     if LFX[o.ClassName] then
         task.defer(function() if o.Parent then safeKill(o) end end)
     end
 end)
 
--- ── WATER → SOLID FLOOR (Core Logic) ─────────────────────────
---[[
-    Chiến lược:
-    1. Terrain: replace toàn bộ vùng Water bằng SmoothPlastic
-       dùng ReadVoxels/WriteVoxels để giữ địa hình, chỉ đổi material
-    2. Invisible Part sàn Y=0 toàn cầu: fallback đảm bảo 100%
-    3. Disable HumanoidStateType.Swimming vĩnh viễn trên LP
-    4. Force Humanoid ra khỏi Swimming state mỗi frame nếu lọt xuống
-]]
+-- ── WATER NUKE + SOLID FLOOR ──────────────────────────────────
+local FLOOR_Y    = 0
+local FLOOR_NAME = "__MrDonSea"
+local SNAP_Y     = 3.5
+local SNAP_LIMIT = FLOOR_Y + 1.5
 
-local FLOOR_Y       = 0
-local FLOOR_NAME    = "__MrDonSolidSea"
-local VOXEL_SIZE    = 4
-local FILL_MATERIAL = Enum.Material.SmoothPlastic
-
-local function buildSolidFloor()
+local function buildFloor()
     if WS:FindFirstChild(FLOOR_NAME) then return end
-    local floor = Instance.new("Part")
-    floor.Name             = FLOOR_NAME
-    floor.Size             = Vector3.new(8000, 4, 8000)
-    floor.CFrame           = CFrame.new(0, FLOOR_Y - 2, 0)
-    floor.Transparency     = 1
-    floor.Anchored         = true
-    floor.CanCollide       = true
-    floor.CanTouch         = false
-    floor.CanQuery         = false
-    floor.CastShadow       = false
-    floor.Massless         = true
-    floor.Material         = FILL_MATERIAL
-    floor.CollisionGroupId = 0
-    floor.Parent           = WS
+    local p = Instance.new("Part")
+    p.Name             = FLOOR_NAME
+    p.Size             = Vector3.new(9e4, 6, 9e4)
+    p.CFrame           = CFrame.new(0, FLOOR_Y - 3, 0)
+    p.Transparency     = 1
+    p.Anchored         = true
+    p.CanCollide       = true
+    p.CanTouch         = false
+    p.CanQuery         = false
+    p.CastShadow       = false
+    p.Massless         = true
+    p.Material         = Enum.Material.SmoothPlastic
+    p.Parent           = WS
 end
 
-local function replaceTerrainWater()
-    local terrain = WS:FindFirstChildOfClass("Terrain")
-    if not terrain then return end
-
-    safeSet(terrain,"Decoration",false)
-    safeSet(terrain,"WaterWaveSize",0)
-    safeSet(terrain,"WaterWaveSpeed",0)
-    safeSet(terrain,"WaterReflectance",0)
-    safeSet(terrain,"WaterTransparency",1)
-
-    local cl = terrain:FindFirstChildOfClass("Clouds")
+local function nukeTerrainWater()
+    local t = WS:FindFirstChildOfClass("Terrain")
+    if not t then return end
+    safeSet(t,"Decoration",false)
+    safeSet(t,"WaterWaveSize",0)
+    safeSet(t,"WaterWaveSpeed",0)
+    safeSet(t,"WaterReflectance",0)
+    safeSet(t,"WaterTransparency",1)
+    local cl = t:FindFirstChildOfClass("Clouds")
     if cl then safeKill(cl) end
-
-    -- ReadVoxels toàn bộ extent của map, swap Water → SmoothPlastic
     pcall(function()
-        local ext = terrain.MaxExtents
-        local minP = ext.Min
-        local maxP = ext.Max
-
-        -- Clamp vùng scan hợp lý tránh timeout
-        local scanMin = Vector3.new(
-            math.max(minP.X, -4000),
-            math.max(minP.Y, -200),
-            math.max(minP.Z, -4000)
-        )
-        local scanMax = Vector3.new(
-            math.min(maxP.X,  4000),
-            math.min(maxP.Y,  50),
-            math.min(maxP.Z,  4000)
-        )
-
-        local region = Region3.new(scanMin, scanMax):ExpandToGrid(VOXEL_SIZE)
-        local mats, occs = terrain:ReadVoxels(region, VOXEL_SIZE)
-
-        local sx,sy,sz = mats.Size.X, mats.Size.Y, mats.Size.Z
-        local changed  = false
-
+        local ext = t.MaxExtents
+        local mn = ext.Min
+        local mx = ext.Max
+        local rMin = Vector3.new(math.max(mn.X,-6000),math.max(mn.Y,-300),math.max(mn.Z,-6000))
+        local rMax = Vector3.new(math.min(mx.X, 6000),math.min(mx.Y, 80), math.min(mx.Z, 6000))
+        local region = Region3.new(rMin,rMax):ExpandToGrid(4)
+        local mats,occs = t:ReadVoxels(region,4)
+        local sx,sy,sz = mats.Size.X,mats.Size.Y,mats.Size.Z
+        local dirty = false
         for x=1,sx do
             for y=1,sy do
                 for z=1,sz do
-                    if mats[x][y][z] == Enum.Material.Water then
-                        mats[x][y][z] = Enum.Material.Air
-                        occs[x][y][z] = 0
-                        changed = true
+                    if mats[x][y][z]==Enum.Material.Water then
+                        mats[x][y][z]=Enum.Material.Air
+                        occs[x][y][z]=0
+                        dirty=true
                     end
                 end
             end
-            -- yield mỗi slice X để không lag
-            if x % 10 == 0 then task.wait() end
+            if x%8==0 then task.wait() end
         end
-
-        if changed then
-            terrain:WriteVoxels(region, VOXEL_SIZE, mats, occs)
-        end
+        if dirty then t:WriteVoxels(region,4,mats,occs) end
     end)
 end
 
--- Xóa BasePart tên chứa water/ocean/sea/wave
 local function nukeWaterParts()
     local d = WS:GetDescendants()
     for i=1,#d do
-        local o = d[i]
+        local o=d[i]
         if o and o.Parent and o:IsA("BasePart")
         and hasWord(o.Name,WATER_W) and not inProtected(o) then
             safeKill(o)
@@ -217,68 +176,74 @@ local function nukeWaterParts()
     end
 end
 
--- Disable Swimming state + force out mỗi khi nhân vật spawn
-local function disableSwimming(char)
+local function disableSwim(char)
     if not char then return end
     local hum = char:WaitForChild("Humanoid",5)
     if not hum then return end
     pcall(function()
-        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming,false)
     end)
 end
 
--- Chạy toàn bộ water pipeline
 task.spawn(function()
-    buildSolidFloor()
-    replaceTerrainWater()
+    buildFloor()
+    nukeTerrainWater()
     nukeWaterParts()
-    if LP.Character then disableSwimming(LP.Character) end
-    LP.CharacterAdded:Connect(function(char)
-        task.spawn(disableSwimming, char)
-    end)
+    if LP.Character then disableSwim(LP.Character) end
+    LP.CharacterAdded:Connect(function(c) task.spawn(disableSwim,c) end)
 end)
 
--- Block water part spawn muộn
 WS.DescendantAdded:Connect(function(o)
     task.defer(function()
-        if not (o and o.Parent) then return end
+        if not(o and o.Parent) then return end
         if o:IsA("BasePart") and hasWord(o.Name,WATER_W) and not inProtected(o) then
             safeKill(o)
         end
     end)
 end)
 
--- Failsafe RenderStepped: nếu nhân vật vẫn lọt xuống nước → kéo lên
-do
-    local SNAP_Y   = FLOOR_Y + 3.2
-    local SNAP_LIM = 0.8
+-- ── WATER SNAP — bind PreSimulation (chạy trước physics + camera) ──
+--[[
+    Dùng Stepped (PreSimulation) thay RenderStepped:
+    Stepped chạy TRƯỚC khi Roblox tính physics frame,
+    nên nhân vật không bao giờ lọt xuống dưới SNAP_LIMIT
+    kể cả 1 frame. Camera cũng không thấy lún.
+]]
+Run.Stepped:Connect(function()
+    local char = LP.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return end
 
-    Run.RenderStepped:Connect(function()
-        local char = LP.Character
-        if not char then return end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local hum  = char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum or hum.Health <= 0 then return end
+    local pos   = root.Position
+    local state = hum:GetState()
+    local underwater = pos.Y < SNAP_LIMIT
+                    or state == Enum.HumanoidStateType.Swimming
 
-        local state = hum:GetState()
-        if state == Enum.HumanoidStateType.Swimming
-        or root.Position.Y < FLOOR_Y + SNAP_LIM then
-            pcall(function()
-                local _,ry,_ = root.CFrame:ToEulerAnglesYXZ()
-                root.CFrame  = CFrame.new(
-                    root.Position.X, SNAP_Y, root.Position.Z
-                ) * CFrame.Angles(0,ry,0)
-            end)
-            pcall(function()
-                hum:ChangeState(Enum.HumanoidStateType.Running)
-            end)
-        end
-    end)
-end
--- ─────────────────────────────────────────────────────────────
+    if underwater then
+        pcall(function()
+            local _,ry,_ = root.CFrame:ToEulerAnglesYXZ()
+            root.CFrame = CFrame.new(pos.X, SNAP_Y, pos.Z)
+                        * CFrame.Angles(0,ry,0)
+            root.AssemblyLinearVelocity = Vector3.new(
+                root.AssemblyLinearVelocity.X,
+                math.max(root.AssemblyLinearVelocity.Y, 0),
+                root.AssemblyLinearVelocity.Z
+            )
+        end)
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end)
+    end
+end)
 
--- ── VFX PURGE ────────────────────────────────────────────────
+-- ── CAMERA LOCK — chạy RenderStepped để giữ camera không lún ──
+--[[
+    Sau khi Stepped snap root lên, camera Roblox đôi khi
+    vẫn interpolate xuống 1 frame. Lock camera Y >= SNAP_Y
+    trong RenderStepped để đảm bảo không thấy lún dù 1ms.
+]]
 local function purgeCamera()
     local cam = WS.CurrentCamera
     if not cam then return end
@@ -287,20 +252,43 @@ local function purgeCamera()
     end
 end
 
+do
+    local prevLook = Vector3.new(0,0,-1)
+    Run.RenderStepped:Connect(function()
+        local cam = WS.CurrentCamera
+        if not cam then return end
+
+        purgeCamera()
+
+        local cf   = cam.CFrame
+        local look = cf.LookVector
+        if look ~= prevLook then
+            prevLook = look
+            local p = cf.Position
+            cam.CFrame = CFrame.new(p, p + look)
+        end
+
+        -- Lock camera không xuống dưới mặt nước
+        local camPos = cam.CFrame.Position
+        if camPos.Y < SNAP_Y then
+            local locked = Vector3.new(camPos.X, SNAP_Y + 1, camPos.Z)
+            cam.CFrame   = CFrame.new(locked, locked + cam.CFrame.LookVector)
+        end
+    end)
+end
+
+-- ── VFX PURGE ────────────────────────────────────────────────
 task.spawn(function()
     local d = WS:GetDescendants()
     for i=1,#d do
-        local o = d[i]
+        local o=d[i]
         if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then safeKill(o) end
         if i%100==0 then task.wait() end
     end
 end)
-
 WS.DescendantAdded:Connect(function(o)
     task.defer(function()
-        if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then
-            safeKill(o)
-        end
+        if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then safeKill(o) end
     end)
 end)
 
@@ -308,7 +296,7 @@ end)
 local function cleanFolder(parent)
     local list = parent:GetChildren()
     for i=1,#list do
-        local o = list[i]
+        local o=list[i]
         if o and o.Parent then
             if not keepTree(o) then
                 if hasProtectedChild(o) then cleanFolder(o)
@@ -318,7 +306,6 @@ local function cleanFolder(parent)
         if i%50==0 then task.wait() end
     end
 end
-
 task.spawn(function()
     for _,name in ipairs({"Map","SeaMap","Environment","World","Map2","Map3","Islands"}) do
         local c = WS:FindFirstChild(name)
@@ -328,71 +315,56 @@ end)
 
 -- ── BOAT PAINT ────────────────────────────────────────────────
 local paintedBoats = {}
-
 local function paintBoat(model)
     if paintedBoats[model] then return end
     paintedBoats[model] = true
     task.spawn(function()
         for _,o in ipairs(model:GetDescendants()) do
             if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
-                safeSet(o,"Color",BLACK)
-                safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
             elseif o:IsA("Decal") or o:IsA("Texture") then
-                safeSet(o,"Color3",BLACK)
-                safeSet(o,"Transparency",1)
+                safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
             end
         end
         model.DescendantAdded:Connect(function(o)
             task.defer(function()
-                if not (o and o.Parent) then return end
+                if not(o and o.Parent) then return end
                 if o:IsA("BasePart") or o:IsA("MeshPart") then
-                    safeSet(o,"Color",BLACK)
-                    safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                    safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
                 elseif o:IsA("Decal") or o:IsA("Texture") then
-                    safeSet(o,"Color3",BLACK)
-                    safeSet(o,"Transparency",1)
+                    safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
                 end
             end)
         end)
     end)
 end
-
 task.spawn(function()
-    for _,o in ipairs(WS:GetDescendants()) do
-        if isBoat(o) then paintBoat(o) end
-    end
+    for _,o in ipairs(WS:GetDescendants()) do if isBoat(o) then paintBoat(o) end end
 end)
-
 WS.DescendantAdded:Connect(function(o)
-    task.defer(function()
-        if o and o.Parent and isBoat(o) then paintBoat(o) end
-    end)
+    task.defer(function() if o and o.Parent and isBoat(o) then paintBoat(o) end end)
 end)
 
--- ── SEA MOB UGLY + STRIP VFX ─────────────────────────────────
+-- ── SEA MOB UGLY ─────────────────────────────────────────────
 local uglyMobs = {}
-
 local function uglyMob(model)
     if uglyMobs[model] then return end
     uglyMobs[model] = true
     task.spawn(function()
         for _,o in ipairs(model:GetDescendants()) do
             if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
-                safeSet(o,"Color",UGLY)
-                safeSet(o,"Material",Enum.Material.SmoothPlastic)
-                safeSet(o,"Reflectance",0)
-                safeSet(o,"CastShadow",false)
+                safeSet(o,"Color",UGLY); safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                safeSet(o,"Reflectance",0); safeSet(o,"CastShadow",false)
             elseif o:IsA("Decal") or o:IsA("Texture") then
                 safeSet(o,"Transparency",1)
-            elseif VFX[o.ClassName] then
-                safeKill(o)
+            elseif VFX[o.ClassName] then safeKill(o)
             elseif o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
                 safeSet(o,"Enabled",false)
             end
         end
         model.DescendantAdded:Connect(function(o)
             task.defer(function()
-                if not (o and o.Parent) then return end
+                if not(o and o.Parent) then return end
                 if VFX[o.ClassName] then safeKill(o)
                 elseif o:IsA("BasePart") or o:IsA("MeshPart") then
                     safeSet(o,"Color",UGLY)
@@ -403,17 +375,11 @@ local function uglyMob(model)
         end)
     end)
 end
-
 task.spawn(function()
-    for _,o in ipairs(WS:GetDescendants()) do
-        if isSeaMob(o) then uglyMob(o) end
-    end
+    for _,o in ipairs(WS:GetDescendants()) do if isSeaMob(o) then uglyMob(o) end end
 end)
-
 WS.DescendantAdded:Connect(function(o)
-    task.defer(function()
-        if o and o.Parent and isSeaMob(o) then uglyMob(o) end
-    end)
+    task.defer(function() if o and o.Parent and isSeaMob(o) then uglyMob(o) end end)
 end)
 
 -- ── OVERLAY STRIP ────────────────────────────────────────────
@@ -429,14 +395,12 @@ local function isUserMenuGui(o)
         or n:find("fluent",1,true) or n:find("kavo",1,true)
         or n:find("redz",1,true)
 end
-
 local function isOverlay(o)
     if isUserMenuGui(o) then return false end
-    if not (o:IsA("Frame") or o:IsA("ImageLabel")
+    if not(o:IsA("Frame") or o:IsA("ImageLabel")
     or o:IsA("ScreenGui") or o:IsA("ImageButton")) then return false end
     return hasWord(o.Name,OVL_W)
 end
-
 local function stripOverlay(gui)
     if not gui then return end
     for _,o in ipairs(gui:GetChildren()) do
@@ -447,7 +411,6 @@ local function stripOverlay(gui)
         end
     end
 end
-
 if GUI then
     stripOverlay(GUI)
     GUI.DescendantAdded:Connect(function(o)
@@ -469,24 +432,20 @@ local function isDmgGui(o)
     if isUserMenuGui(o) then return false end
     return hasWord(o.Name,DMG_W)
 end
-
 local function killDmgGui(o)
     if not isDmgGui(o) then return end
     if o:IsA("BillboardGui") or o:IsA("ScreenGui")
     or o:IsA("SurfaceGui")   or o:IsA("TextLabel")
     or o:IsA("Frame")        or o:IsA("ImageLabel") then
-        safeSet(o,"Enabled",false)
-        safeSet(o,"Visible",false)
+        safeSet(o,"Enabled",false); safeSet(o,"Visible",false)
     end
 end
-
 if GUI then
     for _,o in ipairs(GUI:GetDescendants()) do killDmgGui(o) end
     GUI.DescendantAdded:Connect(function(o)
         task.defer(function() if o and o.Parent then killDmgGui(o) end end)
     end)
 end
-
 WS.DescendantAdded:Connect(function(o)
     task.defer(function()
         if o and o.Parent and isDmgGui(o) then
@@ -502,7 +461,6 @@ local function isHakiObj(o)
     if (o:IsA("Highlight") or o:IsA("BillboardGui")) and not inProtected(o) then return true end
     return hasWord(o.Name,HAKI_W)
 end
-
 local function stripHaki(char)
     if not char then return end
     for _,o in ipairs(char:GetDescendants()) do
@@ -514,7 +472,6 @@ local function stripHaki(char)
         end)
     end)
 end
-
 local function hideChar(char)
     if not char then return end
     task.spawn(function()
@@ -526,44 +483,22 @@ local function hideChar(char)
                 safeSet(o,"Transparency",1)
             elseif o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
                 safeSet(o,"Enabled",false)
-            elseif VFX[o.ClassName] then
-                safeKill(o)
-            end
+            elseif VFX[o.ClassName] then safeKill(o) end
         end
     end)
 end
-
 local function hookPlayer(plr)
     if plr == LP then return end
     local function onChar(char)
-        task.wait(0.2)
-        stripHaki(char)
-        hideChar(char)
+        task.wait(0.2); stripHaki(char); hideChar(char)
     end
     if plr.Character then task.spawn(onChar,plr.Character) end
     plr.CharacterAdded:Connect(onChar)
 end
-
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── CAMERA ANTI-SHAKE ────────────────────────────────────────
-do
-    local prevLook = Vector3.new(0,0,-1)
-    Run.RenderStepped:Connect(function()
-        local cam = WS.CurrentCamera
-        if not cam then return end
-        purgeCamera()
-        local look = cam.CFrame.LookVector
-        if look ~= prevLook then
-            prevLook = look
-            local p = cam.CFrame.Position
-            cam.CFrame = CFrame.new(p, p+look)
-        end
-    end)
-end
-
--- ── FPS DISPLAY BAR ──────────────────────────────────────────
+-- ── FPS BAR ──────────────────────────────────────────────────
 task.spawn(function()
     if not GUI then return end
     local old = GUI:FindFirstChild("__MrDonFPS")
@@ -576,78 +511,120 @@ task.spawn(function()
     sg.IgnoreGuiInset = true
     pcall(function() sg.Parent = GUI end)
 
-    local frame = Instance.new("Frame")
-    frame.Size                   = UDim2.new(0,110,0,34)
-    frame.Position               = UDim2.new(1,-118,0,10)
-    frame.BackgroundColor3       = Color3.fromRGB(15,15,20)
-    frame.BackgroundTransparency = 0.2
-    frame.BorderSizePixel        = 0
-    frame.Active                 = true
-    frame.Parent                 = sg
+    -- Outer card
+    local card = Instance.new("Frame")
+    card.Name                   = "FPSCard"
+    card.Size                   = UDim2.new(0, 130, 0, 42)
+    card.Position               = UDim2.new(1, -146, 0, 12)
+    card.BackgroundColor3       = Color3.fromRGB(10, 10, 14)
+    card.BackgroundTransparency = 0
+    card.BorderSizePixel        = 0
+    card.Active                 = true
+    card.Parent                 = sg
+    Instance.new("UICorner",card).CornerRadius = UDim.new(0,10)
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0,8)
-    corner.Parent = frame
+    -- Accent border stroke
+    local stroke = Instance.new("UIStroke")
+    stroke.Color     = Color3.fromRGB(0, 210, 110)
+    stroke.Thickness = 1.2
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent    = card
 
-    local bar = Instance.new("Frame")
-    bar.Size             = UDim2.new(0,4,0,20)
-    bar.Position         = UDim2.new(0,8,0.5,-10)
-    bar.BackgroundColor3 = Color3.fromRGB(0,220,120)
-    bar.BorderSizePixel  = 0
-    bar.Parent           = frame
+    -- Left color pill
+    local pill = Instance.new("Frame")
+    pill.Name             = "Pill"
+    pill.Size             = UDim2.new(0, 4, 0, 22)
+    pill.Position         = UDim2.new(0, 10, 0.5, -11)
+    pill.BackgroundColor3 = Color3.fromRGB(0, 210, 110)
+    pill.BorderSizePixel  = 0
+    pill.Parent           = card
+    Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0)
 
-    local barCorner = Instance.new("UICorner")
-    barCorner.CornerRadius = UDim.new(1,0)
-    barCorner.Parent = bar
+    -- Label "FPS"
+    local tag = Instance.new("TextLabel")
+    tag.Size                   = UDim2.new(0, 28, 0, 14)
+    tag.Position               = UDim2.new(0, 20, 0, 6)
+    tag.BackgroundTransparency = 1
+    tag.TextColor3             = Color3.fromRGB(120, 120, 140)
+    tag.Font                   = Enum.Font.GothamBold
+    tag.TextSize               = 10
+    tag.Text                   = "FPS"
+    tag.TextXAlignment         = Enum.TextXAlignment.Left
+    tag.Parent                 = card
 
-    local lbl = Instance.new("TextLabel")
-    lbl.Size                   = UDim2.new(1,-20,1,0)
-    lbl.Position               = UDim2.new(0,20,0,0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3             = Color3.fromRGB(240,240,240)
-    lbl.Font                   = Enum.Font.GothamBold
-    lbl.TextSize               = 13
-    lbl.TextXAlignment         = Enum.TextXAlignment.Left
-    lbl.Text                   = "FPS: --"
-    lbl.Parent                 = frame
+    -- Value label
+    local val = Instance.new("TextLabel")
+    val.Size                   = UDim2.new(1, -22, 0, 20)
+    val.Position               = UDim2.new(0, 20, 0, 18)
+    val.BackgroundTransparency = 1
+    val.TextColor3             = Color3.fromRGB(240, 240, 245)
+    val.Font                   = Enum.Font.GothamBold
+    val.TextSize               = 16
+    val.Text                   = "--"
+    val.TextXAlignment         = Enum.TextXAlignment.Left
+    val.Parent                 = card
 
+    -- Mini sparkline bar track
+    local track = Instance.new("Frame")
+    track.Name                   = "Track"
+    track.Size                   = UDim2.new(0, 54, 0, 4)
+    track.Position               = UDim2.new(1, -64, 0.5, -2)
+    track.BackgroundColor3       = Color3.fromRGB(35, 35, 45)
+    track.BorderSizePixel        = 0
+    track.Parent                 = card
+    Instance.new("UICorner",track).CornerRadius = UDim.new(1,0)
+
+    local fill = Instance.new("Frame")
+    fill.Name             = "Fill"
+    fill.Size             = UDim2.new(1, 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(0, 210, 110)
+    fill.BorderSizePixel  = 0
+    fill.Parent           = track
+    Instance.new("UICorner",fill).CornerRadius = UDim.new(1,0)
+
+    -- Drag
     local dragging,dragStart,startPos = false,nil,nil
-    frame.InputBegan:Connect(function(inp)
+    card.InputBegan:Connect(function(inp)
         if inp.UserInputType == Enum.UserInputType.MouseButton1
         or inp.UserInputType == Enum.UserInputType.Touch then
-            dragging  = true
-            dragStart = inp.Position
-            startPos  = frame.Position
+            dragging=true; dragStart=inp.Position; startPos=card.Position
             inp.Changed:Connect(function()
-                if inp.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
+                if inp.UserInputState==Enum.UserInputState.End then dragging=false end
             end)
         end
     end)
-
     UIS.InputChanged:Connect(function(inp)
-        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
-        or inp.UserInputType == Enum.UserInputType.Touch) then
+        if dragging and (inp.UserInputType==Enum.UserInputType.MouseMovement
+        or inp.UserInputType==Enum.UserInputType.Touch) then
             local d = inp.Position - dragStart
-            frame.Position = UDim2.new(
+            card.Position = UDim2.new(
                 startPos.X.Scale, startPos.X.Offset + d.X,
                 startPos.Y.Scale, startPos.Y.Offset + d.Y
             )
         end
     end)
 
+    -- FPS counter
     local fc,at = 0,0
-    local HI  = Color3.fromRGB(0,220,120)
-    local MID = Color3.fromRGB(255,180,0)
-    local LO  = Color3.fromRGB(255,60,60)
+    local C_HI  = Color3.fromRGB(0,210,110)
+    local C_MID = Color3.fromRGB(255,185,0)
+    local C_LO  = Color3.fromRGB(255,55,55)
+    local TARGET = 480
 
     Run.RenderStepped:Connect(function(dt)
-        fc += 1; at += dt
-        if at >= 0.5 then
-            local fps = math.round(fc/at)
-            lbl.Text = "FPS: "..fps
-            bar.BackgroundColor3 = (fps>=50 and HI) or (fps>=30 and MID) or LO
+        fc+=1; at+=dt
+        if at >= 0.4 then
+            local fps  = math.round(fc/at)
+            local ratio= math.clamp(fps/TARGET, 0, 1)
+            local col  = (fps>=50 and C_HI) or (fps>=30 and C_MID) or C_LO
+
+            val.Text          = tostring(fps)
+            val.TextColor3    = col
+            pill.BackgroundColor3 = col
+            stroke.Color          = col
+            fill.Size         = UDim2.new(ratio, 0, 1, 0)
+            fill.BackgroundColor3 = col
+
             fc,at = 0,0
         end
     end)
@@ -657,4 +634,4 @@ end)
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[MrDon] Loaded — Solid Sea Floor | Delta X | Blox Fruits")
+print("[MrDon] Loaded — Anti-Sink v2 | Delta X | Blox Fruits")
