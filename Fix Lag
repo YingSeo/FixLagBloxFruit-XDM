@@ -1,157 +1,105 @@
-local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 
 local LocalPlayer = Players.LocalPlayer
+local KEEP_DELAY = 0.01
 
-local BATCH_SIZE = 500
-local queue = {}
-local head = 1
-local running = true
-local protectedModels = {}
-
-local function isBoatName(name)
-    name = string.lower(name)
-    return name:find("boat", 1, true)
-        or name:find("ship", 1, true)
-        or name:find("raft", 1, true)
-        or name:find("dinghy", 1, true)
-        or name:find("sail", 1, true)
-end
-
-local function isProtectedModel(obj)
-    if not obj:IsA("Model") then
+local function isBoat(model)
+    if not model:IsA("Model") then
         return false
     end
 
-    if LocalPlayer.Character and obj == LocalPlayer.Character then
+    local n = string.lower(model.Name)
+
+    if n:find("boat", 1, true)
+        or n:find("ship", 1, true)
+        or n:find("raft", 1, true)
+        or n:find("dinghy", 1, true)
+        or n:find("sail", 1, true) then
         return true
     end
 
-    if obj:FindFirstChildOfClass("Humanoid") then
-        return true
-    end
-
-    if obj:FindFirstChildWhichIsA("VehicleSeat", true) then
-        return true
-    end
-
-    if isBoatName(obj.Name) then
-        return true
-    end
-
-    local name = string.lower(obj.Name)
-
-    return name == "npc"
-        or name == "npcs"
-        or name == "enemy"
-        or name == "enemies"
-        or name == "characters"
-        or name == "boats"
-        or name == "ships"
+    return model:FindFirstChildWhichIsA("VehicleSeat", true) ~= nil
 end
 
-local function hide(obj)
+local function isCharacter(model)
+    return model:IsA("Model")
+        and model:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+local function hasProtectedDescendant(obj)
+    if obj:IsA("Model") then
+        if isCharacter(obj) or isBoat(obj) then
+            return true
+        end
+    end
+
+    for _, child in ipairs(obj:GetChildren()) do
+        if hasProtectedDescendant(child) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function cleanNode(obj)
     if not obj or not obj.Parent then
         return
     end
 
-    if obj:IsA("BasePart") then
-        obj.LocalTransparencyModifier = 1
-        obj.CastShadow = false
-    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-        obj.Transparency = 1
-    elseif obj:IsA("ParticleEmitter")
-        or obj:IsA("Trail")
-        or obj:IsA("Beam")
-        or obj:IsA("Smoke")
-        or obj:IsA("Fire")
-        or obj:IsA("Sparkles") then
-        obj.Enabled = false
-    elseif obj:IsA("PointLight")
-        or obj:IsA("SpotLight")
-        or obj:IsA("SurfaceLight") then
-        obj.Enabled = false
-    elseif obj:IsA("Highlight") then
-        obj.Enabled = false
-    elseif obj:IsA("BillboardGui")
-        or obj:IsA("SurfaceGui") then
-        obj.Enabled = false
-    end
-end
-
-local function addTree(obj, protected)
-    if not obj or not obj.Parent then
+    if obj:IsA("Model") and (isCharacter(obj) or isBoat(obj)) then
         return
     end
 
-    local currentProtected = protected
-
-    if not currentProtected and obj:IsA("Model") then
-        currentProtected = isProtectedModel(obj)
-
-        if currentProtected then
-            protectedModels[obj] = true
-        end
-    end
-
-    queue[#queue + 1] = {
-        object = obj,
-        protected = currentProtected
-    }
-end
-
-for _, obj in ipairs(Workspace:GetChildren()) do
-    addTree(obj, false)
-end
-
-Workspace.DescendantAdded:Connect(function(obj)
-    if not running then
+    if not hasProtectedDescendant(obj) then
+        obj:Destroy()
         return
     end
 
-    task.defer(function()
-        if obj and obj.Parent then
-            addTree(obj, false)
-        end
+    for _, child in ipairs(obj:GetChildren()) do
+        cleanNode(child)
+        task.wait(KEEP_DELAY)
+    end
+end
+
+local function cleanContainer(container)
+    if not container then
+        return
+    end
+
+    for _, child in ipairs(container:GetChildren()) do
+        cleanNode(child)
+        task.wait()
+    end
+end
+
+local map = Workspace:FindFirstChild("Map")
+
+if map then
+    task.spawn(function()
+        cleanContainer(map)
     end)
-end)
+end
 
-task.spawn(function()
-    while running and head <= #queue do
-        local finish = math.min(head + BATCH_SIZE - 1, #queue)
+local possibleMaps = {
+    Workspace:FindFirstChild("Environment"),
+    Workspace:FindFirstChild("Map2"),
+    Workspace:FindFirstChild("World"),
+}
 
-        for i = head, finish do
-            local item = queue[i]
-            local obj = item.object
-
-            if obj and obj.Parent then
-                if not item.protected then
-                    hide(obj)
-                end
-
-                if obj:IsA("Folder") or obj:IsA("Model") then
-                    local childProtected = item.protected
-
-                    if not childProtected and obj:IsA("Model") then
-                        childProtected = protectedModels[obj] == true
-                    end
-
-                    for _, child in ipairs(obj:GetChildren()) do
-                        addTree(child, childProtected)
-                    end
-                end
-            end
-        end
-
-        head = finish + 1
-
-        if head <= #queue then
-            RunService.Heartbeat:Wait()
-        end
+for _, container in ipairs(possibleMaps) do
+    if container and container ~= map then
+        task.spawn(function()
+            cleanContainer(container)
+        end)
     end
+end
 
-    running = false
-end)
+for _, player in ipairs(Players:GetPlayers()) do
+    if player.Character then
+        player.Character.Archivable = true
+    end
+end
 
-print("FULL MAP CLEANER ON")
+print("FULL MAP CLEANER: ON")
