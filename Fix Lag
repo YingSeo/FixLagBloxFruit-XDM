@@ -2,27 +2,88 @@ local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 
-local LocalPlayer = Players.LocalPlayer
+local player = Players.LocalPlayer
 
-local DELETE_BATCH = 2000
-local DELETE_YIELD = 0.01
+local runtime = Workspace:FindFirstChild("MrDonRuntime")
 
-local protected = {}
-local queue = {}
-local deleting = true
+if runtime then
+    runtime:Destroy()
+end
 
-local function nameHas(name, ...)
-    name = string.lower(name)
+runtime = Instance.new("Folder")
+runtime.Name = "MrDonRuntime"
+runtime.Parent = Workspace
 
-    for i = 1, select("#", ...) do
-        local word = string.lower(select(i, ...))
-        if string.find(name, word, 1, true) then
-            return true
-        end
+local character = player.Character or player.CharacterAdded:Wait()
+local root = character:WaitForChild("HumanoidRootPart")
+
+local floor = Instance.new("Part")
+floor.Name = "WaterFloor"
+floor.Anchored = true
+floor.CanCollide = true
+floor.CanTouch = false
+floor.CanQuery = true
+floor.Transparency = 1
+floor.Size = Vector3.new(8192, 4, 8192)
+floor.CFrame = CFrame.new(root.Position.X, root.Position.Y - 3.5, root.Position.Z)
+floor.Parent = runtime
+
+local function updateFloor()
+    local c = player.Character
+    if not c then
+        return
     end
 
-    return false
+    local r = c:FindFirstChild("HumanoidRootPart")
+    if not r then
+        return
+    end
+
+    local p = r.Position
+    floor.CFrame = CFrame.new(p.X, p.Y - 3.5, p.Z)
 end
+
+RunService.Heartbeat:Connect(updateFloor)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "MrDonFPS"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 999999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local box = Instance.new("Frame")
+box.Size = UDim2.fromOffset(115, 36)
+box.Position = UDim2.new(1, -125, 0, 10)
+box.BackgroundTransparency = 0.2
+box.BorderSizePixel = 0
+box.ZIndex = 999999
+box.Parent = gui
+
+local text = Instance.new("TextLabel")
+text.Size = UDim2.fromScale(1, 1)
+text.BackgroundTransparency = 1
+text.Text = "FPS: --"
+text.TextScaled = true
+text.Font = Enum.Font.GothamBold
+text.TextColor3 = Color3.new(1, 1, 1)
+text.ZIndex = 1000000
+text.Parent = box
+
+local frames = 0
+local timePassed = 0
+
+RunService.RenderStepped:Connect(function(dt)
+    frames += 1
+    timePassed += dt
+
+    if timePassed >= 0.5 then
+        text.Text = "FPS: " .. math.floor(frames / timePassed + 0.5)
+        frames = 0
+        timePassed = 0
+    end
+end)
 
 local function isProtectedModel(obj)
     if not obj:IsA("Model") then
@@ -37,142 +98,58 @@ local function isProtectedModel(obj)
         return true
     end
 
-    if nameHas(obj.Name, "boat", "ship", "raft", "dinghy") then
-        return true
-    end
+    local name = string.lower(obj.Name)
 
-    if LocalPlayer.Character and obj == LocalPlayer.Character then
-        return true
-    end
-
-    return false
+    return name:find("boat", 1, true) ~= nil
+        or name:find("ship", 1, true) ~= nil
+        or name:find("raft", 1, true) ~= nil
 end
 
-local function markProtected(obj)
-    if not obj:IsA("Model") then
+local protected = {}
+
+for _, obj in ipairs(Workspace:GetChildren()) do
+    if isProtectedModel(obj) then
+        protected[obj] = true
+    end
+end
+
+local function removeContainer(obj)
+    if not obj or not obj.Parent then
         return
     end
 
-    if not isProtectedModel(obj) then
+    if obj == runtime
+        or obj == Workspace.Terrain
+        or obj == Workspace.CurrentCamera
+        or protected[obj] then
         return
     end
 
-    local current = obj
-
-    while current and current ~= Workspace do
-        protected[current] = true
-        current = current.Parent
-    end
+    obj:Destroy()
 end
-
-for _, obj in ipairs(Workspace:GetDescendants()) do
-    if obj:IsA("Model") then
-        markProtected(obj)
-    end
-end
-
-local function destroyTree(parent)
-    local children = parent:GetChildren()
-
-    for i = 1, #children do
-        local obj = children[i]
-
-        if obj and obj.Parent then
-            if not protected[obj] then
-                obj:Destroy()
-            else
-                destroyTree(obj)
-            end
-        end
-
-        if i % DELETE_BATCH == 0 then
-            task.wait(DELETE_YIELD)
-        end
-    end
-end
-
-local keepContainers = {
-    Camera = true,
-    Terrain = true,
-    CurrentCamera = true
-}
 
 task.spawn(function()
-    for _, obj in ipairs(Workspace:GetChildren()) do
-        if not keepContainers[obj.Name] and not protected[obj] then
-            obj:Destroy()
-        elseif protected[obj] then
-            destroyTree(obj)
+    local children = Workspace:GetChildren()
+
+    for i = 1, #children do
+        removeContainer(children[i])
+    end
+end)
+
+player.CharacterAdded:Connect(function(newCharacter)
+    character = newCharacter
+
+    task.defer(function()
+        local newRoot = newCharacter:WaitForChild("HumanoidRootPart", 5)
+
+        if newRoot then
+            floor.CFrame = CFrame.new(
+                newRoot.Position.X,
+                newRoot.Position.Y - 3.5,
+                newRoot.Position.Z
+            )
         end
-
-        task.wait()
-    end
-
-    deleting = false
+    end)
 end)
 
-local floor = Instance.new("Part")
-floor.Name = "ClientInvisibleFloor"
-floor.Anchored = true
-floor.CanCollide = true
-floor.CanTouch = false
-floor.CanQuery = true
-floor.Transparency = 1
-floor.Size = Vector3.new(2048, 1, 2048)
-floor.Parent = Workspace
-
-local function updateFloor()
-    local character = LocalPlayer.Character
-    if not character then
-        return
-    end
-
-    local root = character:FindFirstChild("HumanoidRootPart")
-    if not root then
-        return
-    end
-
-    local p = root.Position
-    floor.CFrame = CFrame.new(p.X, p.Y - 3.1, p.Z)
-end
-
-RunService.Heartbeat:Connect(updateFloor)
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "ClientFPS"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 125, 0, 38)
-frame.Position = UDim2.new(1, -135, 0, 10)
-frame.BackgroundTransparency = 0.25
-frame.BorderSizePixel = 0
-frame.Parent = gui
-
-local label = Instance.new("TextLabel")
-label.Size = UDim2.new(1, -10, 1, -6)
-label.Position = UDim2.new(0, 5, 0, 3)
-label.BackgroundTransparency = 1
-label.Text = "FPS: --"
-label.TextScaled = true
-label.Font = Enum.Font.GothamBold
-label.TextColor3 = Color3.new(1, 1, 1)
-label.Parent = frame
-
-local frames = 0
-local elapsed = 0
-
-RunService.RenderStepped:Connect(function(dt)
-    frames += 1
-    elapsed += dt
-
-    if elapsed >= 0.5 then
-        local fps = math.floor(frames / elapsed + 0.5)
-        label.Text = "FPS: " .. fps
-
-        frames = 0
-        elapsed = 0
-    end
-end)
+print("MrDon Cleaner ON")
