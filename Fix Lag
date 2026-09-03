@@ -1,365 +1,197 @@
-local Players    = game:GetService("Players")
-local Workspace  = game:GetService("Workspace")
-local Lighting   = game:GetService("Lighting")
-local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
+local Plr  = game:GetService("Players")
+local WS   = game:GetService("Workspace")
+local Lgt  = game:GetService("Lighting")
+local Run  = game:GetService("RunService")
 
 repeat task.wait() until game:IsLoaded()
 
-local LP    = Players.LocalPlayer
-local BLACK = Color3.fromRGB(0, 0, 0)
-local UGLY  = Color3.fromRGB(80, 60, 40)
+local LP    = Plr.LocalPlayer
+local BLACK = Color3.fromRGB(0,0,0)
+local pGui  = LP:WaitForChild("PlayerGui", 10)
 
-local SPECIAL_MAPS = {
-    frozendimension   = true,
-    prehistoricisland = true,
-    kitsuneisland     = true,
+local VFX = {
+    ParticleEmitter=1, Beam=1, Trail=1,
+    Fire=1, Smoke=1, Sparkles=1,
+    SelectionBox=1, SelectionSphere=1,
 }
-
-local KEEP_CONTAINERS = {
-    enemies    = true, enemy      = true,
-    characters = true, character  = true,
-    npcs       = true, npc        = true,
-    boats      = true, boat       = true,
-    ships      = true, ship       = true,
+local LFX = {
+    ColorCorrectionEffect=1, BloomEffect=1, BlurEffect=1,
+    SunRaysEffect=1, DepthOfFieldEffect=1, Sky=1, Atmosphere=1,
 }
-
-local VFX_CLASSES = {
-    ParticleEmitter  = true, Beam            = true,
-    Trail            = true, Fire            = true,
-    Smoke            = true, Sparkles        = true,
-    SelectionBox     = true, SelectionSphere = true,
+local KEEP = {
+    enemies=1, enemy=1, characters=1, character=1,
+    npcs=1, npc=1, boats=1, boat=1, ships=1, ship=1,
 }
+local SPECIAL = { frozendimension=1, prehistoricisland=1, kitsuneisland=1 }
 
-local LIGHTING_FX = {
-    ColorCorrectionEffect = true, BloomEffect      = true,
-    BlurEffect            = true, SunRaysEffect     = true,
-    DepthOfFieldEffect    = true, Sky               = true,
-    Atmosphere            = true,
-}
+local function norm(s) return s:lower():gsub("[^%w]","") end
 
-local HAKI_PATTERNS = {
-    "aura", "haki", "kenbun", "observe", "kenbunshoku",
-    "v2effect", "v3effect", "v4effect",
-}
-
-local SEA_MOB_PATTERNS = {
-    "seabeast", "terroshark", "shark", "leviathan",
-    "seamonster", "seamob", "krabbe", "krabben",
-}
-
-local function norm(s)
-    return s:lower():gsub("[^%w]", "")
-end
-
-local function isSpecial(name)
-    local n = norm(name)
-    if SPECIAL_MAPS[n] then return true end
-    for k in next, SPECIAL_MAPS do
-        if n:find(k, 1, true) then return true end
-    end
+local function hasWord(s, words)
+    local n = norm(s)
+    for i=1,#words do if n:find(words[i],1,true) then return true end end
     return false
 end
 
-local function isBoat(obj)
-    if not obj:IsA("Model") then return false end
-    local n = norm(obj.Name)
+local function isBoat(o)
+    if not o:IsA("Model") then return false end
+    local n = norm(o.Name)
     if n:find("boat",1,true) or n:find("ship",1,true)
     or n:find("raft",1,true) or n:find("dinghy",1,true) then return true end
-    return obj:FindFirstChildWhichIsA("VehicleSeat", true) ~= nil
+    return o:FindFirstChildWhichIsA("VehicleSeat",true) ~= nil
 end
 
-local function isSeaMob(obj)
-    if not obj:IsA("Model") then return false end
-    local n = norm(obj.Name)
-    for _, p in ipairs(SEA_MOB_PATTERNS) do
-        if n:find(p, 1, true) then return true end
+local SEA_W = {"seabeast","terroshark","shark","leviathan","seamonster","seamob","krabbe","krabben"}
+local function isSeaMob(o)
+    return o:IsA("Model") and hasWord(o.Name, SEA_W)
+end
+
+local function isProtected(o)
+    if not o:IsA("Model") then return false end
+    if o:FindFirstChildOfClass("Humanoid") then return true end
+    return isBoat(o) or isSeaMob(o) or SPECIAL[norm(o.Name)] ~= nil
+end
+
+local function keepTree(o)
+    if o:IsA("Model") then return isProtected(o) end
+    return KEEP[norm(o.Name)] == true
+end
+
+local function hasProtectedChild(o)
+    if keepTree(o) then return true end
+    for _,c in ipairs(o:GetChildren()) do
+        if keepTree(c) or hasProtectedChild(c) then return true end
     end
     return false
 end
 
-local function isProtected(obj)
-    if not obj:IsA("Model") then return false end
-    if obj:FindFirstChildOfClass("Humanoid") then return true end
-    if isBoat(obj) then return true end
-    if isSeaMob(obj) then return true end
-    if isSpecial(obj.Name) then return true end
-    return false
-end
-
-local function keepTree(obj)
-    if obj:IsA("Model") then return isProtected(obj) end
-    return KEEP_CONTAINERS[norm(obj.Name)] == true
-end
-
-local function hasProtected(obj)
-    if keepTree(obj) then return true end
-    for _, c in ipairs(obj:GetChildren()) do
-        if keepTree(c) or hasProtected(c) then return true end
-    end
-    return false
-end
-
-local function inProtectedTree(obj)
-    local p = obj.Parent
-    while p and p ~= Workspace and p ~= game do
+local function inProtected(o)
+    local p = o.Parent
+    while p and p ~= WS and p ~= game do
         if keepTree(p) then return true end
         p = p.Parent
     end
     return false
 end
 
--- ── XÓA NƯỚC BIỂN ────────────────────────────────────────────
-local function nukeWater()
-    local terrain = Workspace:FindFirstChildOfClass("Terrain")
-    if not terrain then return end
-    pcall(function() terrain.Decoration       = false end)
-    pcall(function() terrain.WaterWaveSize     = 0    end)
-    pcall(function() terrain.WaterWaveSpeed    = 0    end)
-    pcall(function() terrain.WaterReflectance  = 0    end)
-    pcall(function() terrain.WaterTransparency = 1    end)
+local function safeKill(o) pcall(o.Destroy, o) end
+local function safeSet(o,k,v) pcall(function() o[k]=v end) end
 
-    local region = Workspace.Terrain.MaxExtents
-    pcall(function()
-        local size = region.Size
-        local fill = Enum.Material.Air
-        Workspace.Terrain:FillBlock(
-            CFrame.new(region.CFrame.Position),
-            size,
-            fill
-        )
-    end)
-
-    local clouds = terrain:FindFirstChildOfClass("Clouds")
-    if clouds then pcall(function() clouds:Destroy() end) end
-
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            local n = norm(obj.Name)
-            if n:find("water",1,true) or n:find("ocean",1,true)
-            or n:find("sea",1,true)   or n:find("wave",1,true) then
-                if not inProtectedTree(obj) then
-                    pcall(function() obj:Destroy() end)
-                end
-            end
-        end
-    end
+for cls in next,LFX do
+    local o = Lgt:FindFirstChildOfClass(cls)
+    if o then safeKill(o) end
 end
+Lgt.GlobalShadows  = false
+Lgt.FogEnd         = 1e5
+Lgt.FogStart       = 99999
+Lgt.Brightness     = 2
+Lgt.ClockTime      = 14
+Lgt.Ambient        = Color3.fromRGB(178,178,178)
+Lgt.OutdoorAmbient = Color3.fromRGB(178,178,178)
 
-task.spawn(nukeWater)
-
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function()
-        if not (obj and obj.Parent) then return end
-        if obj:IsA("BasePart") then
-            local n = norm(obj.Name)
-            if (n:find("water",1,true) or n:find("ocean",1,true)
-            or  n:find("sea",1,true)   or n:find("wave",1,true))
-            and not inProtectedTree(obj) then
-                pcall(function() obj:Destroy() end)
-            end
-        end
-    end)
+Lgt.ChildAdded:Connect(function(o)
+    if LFX[o.ClassName] then
+        task.defer(function() if o.Parent then safeKill(o) end end)
+    end
 end)
--- ─────────────────────────────────────────────────────────────
 
--- ── MOB XẤU + XÓA SKILL VFX CỦA MOB ─────────────────────────
-local uglyMobs = {}
+local WATER_W = {"water","ocean","sea","wave"}
 
-local function uglyMob(model)
-    if uglyMobs[model] then return end
-    uglyMobs[model] = true
-
-    task.spawn(function()
-        for _, obj in ipairs(model:GetDescendants()) do
-            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
-                pcall(function()
-                    obj.Color        = UGLY
-                    obj.Material     = Enum.Material.SmoothPlastic
-                    obj.Reflectance  = 0
-                    obj.CastShadow   = false
-                end)
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                pcall(function()
-                    obj.Transparency = 1
-                end)
-            elseif VFX_CLASSES[obj.ClassName] then
-                pcall(function() obj:Destroy() end)
-            elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-                pcall(function() obj.Enabled = false end)
-            end
-        end
-
-        model.DescendantAdded:Connect(function(obj)
-            task.defer(function()
-                if not (obj and obj.Parent) then return end
-                if VFX_CLASSES[obj.ClassName] then
-                    pcall(function() obj:Destroy() end)
-                elseif obj:IsA("BasePart") or obj:IsA("MeshPart") then
-                    pcall(function()
-                        obj.Color       = UGLY
-                        obj.Material    = Enum.Material.SmoothPlastic
-                        obj.CastShadow  = false
-                    end)
-                end
-            end)
-        end)
-    end)
+local function isWaterPart(o)
+    return o:IsA("BasePart") and hasWord(o.Name, WATER_W) and not inProtected(o)
 end
-
-local function scanSeaMobs(parent)
-    if not parent then return end
-    for _, obj in ipairs(parent:GetDescendants()) do
-        if isSeaMob(obj) then uglyMob(obj) end
-    end
-end
-
-task.spawn(function() scanSeaMobs(Workspace) end)
-
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function()
-        if obj and obj.Parent and isSeaMob(obj) then
-            uglyMob(obj)
-        end
-    end)
-end)
--- ─────────────────────────────────────────────────────────────
-
--- ── XÓA VIỀN MÀN HÌNH V4 (ScreenGui / Frame viền) ────────────
-local function stripV4Border(gui)
-    if not gui then return end
-    for _, obj in ipairs(gui:GetDescendants()) do
-        local n = norm(obj.Name)
-        if n:find("v4",1,true) or n:find("race",1,true)
-        or n:find("border",1,true) or n:find("vignette",1,true)
-        or n:find("edge",1,true)   or n:find("rim",1,true)
-        or n:find("glow",1,true)   or n:find("aura",1,true) then
-            if obj:IsA("Frame") or obj:IsA("ImageLabel")
-            or obj:IsA("ScreenGui") or obj:IsA("ImageButton") then
-                pcall(function() obj.Visible = false end)
-            end
-        end
-    end
-end
-
-local playerGui = LP:WaitForChild("PlayerGui", 10)
-
-if playerGui then
-    stripV4Border(playerGui)
-
-    playerGui.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            if not (obj and obj.Parent) then return end
-            local n = norm(obj.Name)
-            if n:find("v4",1,true) or n:find("race",1,true)
-            or n:find("border",1,true) or n:find("vignette",1,true)
-            or n:find("edge",1,true)   or n:find("rim",1,true)
-            or n:find("glow",1,true)   or n:find("aura",1,true) then
-                if obj:IsA("Frame") or obj:IsA("ImageLabel")
-                or obj:IsA("ScreenGui") or obj:IsA("ImageButton") then
-                    pcall(function() obj.Visible = false end)
-                end
-            end
-        end)
-    end)
-end
--- ─────────────────────────────────────────────────────────────
-
--- ── XÓA HIỂN THỊ SÁT THƯƠNG NHẬN ĐƯỢC ───────────────────────
-local DMG_PATTERNS = {
-    "damage", "dmg", "hit", "satthuong", "number",
-    "floatingtext", "damagegui", "damagetext",
-    "combattext", "popup", "indicator",
-}
-
-local function isDmgGui(obj)
-    local n = norm(obj.Name)
-    for _, p in ipairs(DMG_PATTERNS) do
-        if n:find(p, 1, true) then return true end
-    end
-    return false
-end
-
-local function stripDmgGui(parent)
-    if not parent then return end
-    for _, obj in ipairs(parent:GetDescendants()) do
-        if isDmgGui(obj) then
-            if obj:IsA("BillboardGui") or obj:IsA("ScreenGui")
-            or obj:IsA("SurfaceGui")   or obj:IsA("TextLabel")
-            or obj:IsA("Frame")        or obj:IsA("ImageLabel") then
-                pcall(function() obj.Enabled = false end)
-                pcall(function() obj.Visible = false end)
-            end
-        end
-    end
-end
-
-if playerGui then
-    stripDmgGui(playerGui)
-    playerGui.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            if not (obj and obj.Parent) then return end
-            if isDmgGui(obj) then
-                pcall(function() obj.Enabled = false end)
-                pcall(function() obj.Visible = false end)
-            end
-        end)
-    end)
-end
-
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function()
-        if not (obj and obj.Parent) then return end
-        if isDmgGui(obj) then
-            if obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-                pcall(function() obj.Enabled = false end)
-            end
-        end
-    end)
-end)
 
 task.spawn(function()
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if isDmgGui(obj) and (obj:IsA("BillboardGui") or obj:IsA("SurfaceGui")) then
-            pcall(function() obj.Enabled = false end)
-        end
+    local t = WS:FindFirstChildOfClass("Terrain")
+    if t then
+        safeSet(t,"Decoration",false)
+        safeSet(t,"WaterWaveSize",0)
+        safeSet(t,"WaterWaveSpeed",0)
+        safeSet(t,"WaterReflectance",0)
+        safeSet(t,"WaterTransparency",1)
+        local cl = t:FindFirstChildOfClass("Clouds")
+        if cl then safeKill(cl) end
+        pcall(function()
+            local ext = WS.Terrain.MaxExtents
+            WS.Terrain:FillBlock(CFrame.new(ext.CFrame.Position), ext.Size, Enum.Material.Air)
+        end)
+    end
+    local d = WS:GetDescendants()
+    for i=1,#d do
+        if d[i] and d[i].Parent and isWaterPart(d[i]) then safeKill(d[i]) end
+        if i%100==0 then task.wait() end
     end
 end)
--- ─────────────────────────────────────────────────────────────
 
--- ── BOAT PAINT ────────────────────────────────────────────────
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if o and o.Parent and isWaterPart(o) then safeKill(o) end
+    end)
+end)
+
+local function purgeCamera()
+    local cam = WS.CurrentCamera
+    if not cam then return end
+    for _,o in ipairs(cam:GetChildren()) do
+        if VFX[o.ClassName] or LFX[o.ClassName] then safeKill(o) end
+    end
+end
+
+task.spawn(function()
+    local d = WS:GetDescendants()
+    for i=1,#d do
+        local o = d[i]
+        if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then safeKill(o) end
+        if i%100==0 then task.wait() end
+    end
+end)
+
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then safeKill(o) end
+    end)
+end)
+
+local function cleanFolder(parent)
+    local list = parent:GetChildren()
+    for i=1,#list do
+        local o = list[i]
+        if o and o.Parent then
+            if not keepTree(o) then
+                if hasProtectedChild(o) then cleanFolder(o)
+                else safeKill(o) end
+            end
+        end
+        if i%50==0 then task.wait() end
+    end
+end
+
+task.spawn(function()
+    for _,name in ipairs({"Map","SeaMap","Environment","World","Map2","Map3","Islands"}) do
+        local c = WS:FindFirstChild(name)
+        if c then task.spawn(cleanFolder,c) end
+    end
+end)
+
 local paintedBoats = {}
 
 local function paintBoat(model)
     if paintedBoats[model] then return end
     paintedBoats[model] = true
     task.spawn(function()
-        for _, obj in ipairs(model:GetDescendants()) do
-            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
-                pcall(function()
-                    obj.Color    = BLACK
-                    obj.Material = Enum.Material.SmoothPlastic
-                end)
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                pcall(function()
-                    obj.Color3       = BLACK
-                    obj.Transparency = 1
-                end)
+        for _,o in ipairs(model:GetDescendants()) do
+            if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
+                safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
             end
         end
-        model.DescendantAdded:Connect(function(obj)
+        model.DescendantAdded:Connect(function(o)
             task.defer(function()
-                if not (obj and obj.Parent) then return end
-                if obj:IsA("BasePart") or obj:IsA("MeshPart") then
-                    pcall(function()
-                        obj.Color    = BLACK
-                        obj.Material = Enum.Material.SmoothPlastic
-                    end)
-                elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                    pcall(function()
-                        obj.Color3       = BLACK
-                        obj.Transparency = 1
-                    end)
+                if not (o and o.Parent) then return end
+                if o:IsA("BasePart") or o:IsA("MeshPart") then
+                    safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                elseif o:IsA("Decal") or o:IsA("Texture") then
+                    safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
                 end
             end)
         end)
@@ -367,123 +199,114 @@ local function paintBoat(model)
 end
 
 task.spawn(function()
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if isBoat(obj) then paintBoat(obj) end
-    end
+    for _,o in ipairs(WS:GetDescendants()) do if isBoat(o) then paintBoat(o) end end
+end)
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function() if o and o.Parent and isBoat(o) then paintBoat(o) end end)
 end)
 
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function()
-        if obj and obj.Parent and isBoat(obj) then paintBoat(obj) end
-    end)
-end)
--- ─────────────────────────────────────────────────────────────
+local OVL_W = {
+    "v4","race","border","vignette","edge","rim","glow","aura",
+    "overlay","screenfx","effect","terroshark","terror","shark",
+    "seabeast","beast","darkscreen","blackscreen","darken","fog",
+    "mist","flash","warning","alert","danger","encounter",
+    "boss","spawn","appear","cinematic","cutscene",
+}
 
--- ── MAP CLEAN ─────────────────────────────────────────────────
-local function cleanFolder(parent)
-    local list = parent:GetChildren()
-    for i = 1, #list do
-        local obj = list[i]
-        if obj and obj.Parent then
-            if keepTree(obj) then
-            elseif hasProtected(obj) then
-                cleanFolder(obj)
-            else
-                pcall(function() obj:Destroy() end)
-            end
+local function isOverlay(o)
+    if not (o:IsA("Frame") or o:IsA("ImageLabel")
+         or o:IsA("ScreenGui") or o:IsA("ImageButton")) then return false end
+    if hasWord(o.Name, OVL_W) then return true end
+    if o:IsA("Frame") or o:IsA("ImageLabel") then
+        local ok,bc = pcall(function() return o.BackgroundColor3 end)
+        if ok and (bc.R+bc.G+bc.B)<0.15 then
+            local ok2,tr = pcall(function() return o.BackgroundTransparency end)
+            if ok2 and tr<0.85 then return true end
         end
-        if i % 50 == 0 then task.wait() end
-    end
-end
-
-task.spawn(function()
-    local roots = {"Map","SeaMap","Environment","World","Map2","Map3","Islands"}
-    for _, name in ipairs(roots) do
-        local c = Workspace:FindFirstChild(name)
-        if c then task.spawn(cleanFolder, c) end
-    end
-end)
--- ─────────────────────────────────────────────────────────────
-
--- ── LIGHTING ──────────────────────────────────────────────────
-do
-    for cls in next, LIGHTING_FX do
-        local o = Lighting:FindFirstChildOfClass(cls)
-        if o then pcall(function() o:Destroy() end) end
-    end
-    Lighting.GlobalShadows  = false
-    Lighting.FogEnd         = 100000
-    Lighting.FogStart       = 99999
-    Lighting.Brightness     = 2
-    Lighting.ClockTime      = 14
-    Lighting.Ambient        = Color3.fromRGB(178, 178, 178)
-    Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
-end
-
-local function purgeFX(parent)
-    if not parent then return end
-    for _, obj in ipairs(parent:GetChildren()) do
-        if LIGHTING_FX[obj.ClassName] or VFX_CLASSES[obj.ClassName] then
-            pcall(function() obj:Destroy() end)
+        local ok3,sz = pcall(function() return o.Size end)
+        if ok3 and sz.X.Scale>=0.8 and sz.Y.Scale>=0.8 then
+            local ok4,tr2 = pcall(function() return o.BackgroundTransparency end)
+            if ok4 and tr2<0.95 then return true end
         end
-    end
-end
-
-purgeFX(Workspace.CurrentCamera)
-purgeFX(Lighting)
-
-Lighting.ChildAdded:Connect(function(obj)
-    if LIGHTING_FX[obj.ClassName] then
-        task.defer(function()
-            if obj and obj.Parent then pcall(function() obj:Destroy() end) end
-        end)
-    end
-end)
-
-task.spawn(function()
-    local desc = Workspace:GetDescendants()
-    for i = 1, #desc do
-        local obj = desc[i]
-        if obj and obj.Parent and VFX_CLASSES[obj.ClassName]
-        and not inProtectedTree(obj) then
-            pcall(function() obj:Destroy() end)
-        end
-        if i % 80 == 0 then task.wait() end
-    end
-end)
-
-Workspace.DescendantAdded:Connect(function(obj)
-    task.defer(function()
-        if not (obj and obj.Parent) then return end
-        if VFX_CLASSES[obj.ClassName] and not inProtectedTree(obj) then
-            pcall(function() obj:Destroy() end)
-        end
-    end)
-end)
--- ─────────────────────────────────────────────────────────────
-
--- ── HAKI + HIDE OTHER PLAYERS ─────────────────────────────────
-local function isHakiObj(obj)
-    if obj:IsA("Highlight") or obj:IsA("BillboardGui") then
-        return not inProtectedTree(obj) and true
-    end
-    local n = norm(obj.Name)
-    for _, p in ipairs(HAKI_PATTERNS) do
-        if n:find(p, 1, true) then return true end
     end
     return false
 end
 
+local function stripOverlay(gui)
+    if not gui then return end
+    for _,o in ipairs(gui:GetDescendants()) do
+        if isOverlay(o) then
+            safeSet(o,"Visible",false)
+            safeSet(o,"BackgroundTransparency",1)
+            safeSet(o,"ImageTransparency",1)
+        end
+    end
+end
+
+if pGui then
+    stripOverlay(pGui)
+    pGui.DescendantAdded:Connect(function(o)
+        task.defer(function()
+            if o and o.Parent and isOverlay(o) then
+                safeSet(o,"Visible",false)
+                safeSet(o,"BackgroundTransparency",1)
+                safeSet(o,"ImageTransparency",1)
+            end
+        end)
+    end)
+    task.spawn(function()
+        while true do task.wait(2) stripOverlay(pGui) end
+    end)
+end
+
+local DMG_W = {
+    "damage","dmg","hit","satthuong","number","floatingtext",
+    "damagegui","damagetext","combattext","popup","indicator",
+}
+
+local function isDmgGui(o) return hasWord(o.Name, DMG_W) end
+
+local function killDmgGui(o)
+    if isDmgGui(o) then
+        if o:IsA("BillboardGui") or o:IsA("ScreenGui")
+        or o:IsA("SurfaceGui") or o:IsA("TextLabel")
+        or o:IsA("Frame") or o:IsA("ImageLabel") then
+            safeSet(o,"Enabled",false); safeSet(o,"Visible",false)
+        end
+    end
+end
+
+if pGui then
+    for _,o in ipairs(pGui:GetDescendants()) do killDmgGui(o) end
+    pGui.DescendantAdded:Connect(function(o)
+        task.defer(function() if o and o.Parent then killDmgGui(o) end end)
+    end)
+end
+WS.DescendantAdded:Connect(function(o)
+    task.defer(function()
+        if o and o.Parent and isDmgGui(o) then
+            if o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
+                safeSet(o,"Enabled",false)
+            end
+        end
+    end)
+end)
+
+local HAKI_W = {"aura","haki","kenbun","observe","kenbunshoku","v2effect","v3effect","v4effect"}
+
+local function isHakiObj(o)
+    if (o:IsA("Highlight") or o:IsA("BillboardGui")) and not inProtected(o) then return true end
+    return hasWord(o.Name, HAKI_W)
+end
+
 local function stripHaki(char)
     if not char then return end
-    for _, obj in ipairs(char:GetDescendants()) do
-        if isHakiObj(obj) then pcall(function() obj:Destroy() end) end
+    for _,o in ipairs(char:GetDescendants()) do
+        if isHakiObj(o) then safeKill(o) end
     end
-    char.DescendantAdded:Connect(function(obj)
+    char.DescendantAdded:Connect(function(o)
         task.defer(function()
-            if obj and obj.Parent and isHakiObj(obj) then
-                pcall(function() obj:Destroy() end)
-            end
+            if o and o.Parent and isHakiObj(o) then safeKill(o) end
         end)
     end)
 end
@@ -492,16 +315,14 @@ local function hideChar(char)
     if not char then return end
     task.spawn(function()
         task.wait(0.1)
-        for _, obj in ipairs(char:GetDescendants()) do
-            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
-                pcall(function() obj.Transparency = 1; obj.CastShadow = false end)
-            elseif obj:IsA("Decal") or obj:IsA("Texture") then
-                pcall(function() obj.Transparency = 1 end)
-            elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
-                pcall(function() obj.Enabled = false end)
-            elseif VFX_CLASSES[obj.ClassName] then
-                pcall(function() obj:Destroy() end)
-            end
+        for _,o in ipairs(char:GetDescendants()) do
+            if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
+                safeSet(o,"Transparency",1); safeSet(o,"CastShadow",false)
+            elseif o:IsA("Decal") or o:IsA("Texture") then
+                safeSet(o,"Transparency",1)
+            elseif o:IsA("BillboardGui") or o:IsA("SurfaceGui") then
+                safeSet(o,"Enabled",false)
+            elseif VFX[o.ClassName] then safeKill(o) end
         end
     end)
 end
@@ -509,68 +330,164 @@ end
 local function hookPlayer(plr)
     if plr == LP then return end
     local function onChar(char)
-        task.wait(0.2)
-        stripHaki(char)
-        hideChar(char)
+        task.wait(0.2); stripHaki(char); hideChar(char)
     end
     if plr.Character then task.spawn(onChar, plr.Character) end
     plr.CharacterAdded:Connect(onChar)
 end
 
-for _, plr in ipairs(Players:GetPlayers()) do hookPlayer(plr) end
-Players.PlayerAdded:Connect(hookPlayer)
--- ─────────────────────────────────────────────────────────────
+for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
+Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── CAMERA SHAKE + WATER WALK ─────────────────────────────────
 do
-    local WATER_OFFSET = 3.2
-    local SINK_LIMIT   = 0.6
-    local rayParams    = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    local prevLook = Vector3.new(0, 0, -1)
+    local SURF_Y, WALK_OFF, SINK_THR, DBNC = nil, 3.0, -0.8, 0.3
+    local lastFix = 0
+    local gp = RaycastParams.new()
+    gp.FilterType = Enum.RaycastFilterType.Exclude
 
-    RunService.RenderStepped:Connect(function()
-        local cam = Workspace.CurrentCamera
-        if cam then
-            local look = cam.CFrame.LookVector
-            if look ~= prevLook then
-                prevLook = look
-                local pos = cam.CFrame.Position
-                cam.CFrame = CFrame.new(pos, pos + look)
-            end
-            purgeFX(cam)
-        end
+    task.spawn(function()
+        local r = WS:Raycast(Vector3.new(0,2000,0), Vector3.new(0,-4000,0), gp)
+        SURF_Y = r and r.Position.Y or 0
+    end)
 
+    Run.Heartbeat:Connect(function()
         local char = LP.Character
         if not char then return end
         local root = char:FindFirstChild("HumanoidRootPart")
         local hum  = char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum or hum.Health <= 0 then return end
+        if not root or not hum or hum.Health<=0 then return end
+        if hum:GetState() ~= Enum.HumanoidStateType.Swimming then return end
 
-        if hum:GetState() == Enum.HumanoidStateType.Swimming then
-            rayParams.FilterDescendantsInstances = {char}
-            local result = Workspace:Raycast(
-                root.Position + Vector3.new(0, 5, 0),
-                Vector3.new(0, -12, 0),
-                rayParams
-            )
-            if result and result.Material == Enum.Material.Water then
-                local targetY = result.Position.Y + WATER_OFFSET
-                if root.Position.Y < targetY - SINK_LIMIT then
-                    pcall(function()
-                        local _, ry, _ = root.CFrame:ToEulerAnglesYXZ()
-                        root.CFrame = CFrame.new(root.Position.X, targetY, root.Position.Z)
-                            * CFrame.Angles(0, ry, 0)
-                    end)
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
+        local now = tick()
+        if now - lastFix < DBNC then return end
+
+        if not SURF_Y then
+            gp.FilterDescendantsInstances = {char}
+            local r = WS:Raycast(root.Position+Vector3.new(0,200,0), Vector3.new(0,-400,0), gp)
+            SURF_Y = r and r.Position.Y or 0
+        end
+
+        local targetY = SURF_Y + WALK_OFF
+        if root.Position.Y < targetY + SINK_THR then
+            lastFix = now
+            pcall(function()
+                local _,ry,_ = root.CFrame:ToEulerAnglesYXZ()
+                root.CFrame = CFrame.new(root.Position.X, targetY, root.Position.Z)
+                           * CFrame.Angles(0,ry,0)
+                root.AssemblyLinearVelocity = Vector3.new(
+                    root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+            end)
+            task.delay(0.05, function()
+                if hum and hum.Health>0 then
+                    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
                 end
-            end
+            end)
         end
     end)
 end
--- ─────────────────────────────────────────────────────────────
+
+do
+    local prevLook = Vector3.new(0,0,-1)
+    Run.RenderStepped:Connect(function()
+        local cam = WS.CurrentCamera
+        if not cam then return end
+        purgeCamera()
+        local look = cam.CFrame.LookVector
+        if look ~= prevLook then
+            prevLook = look
+            local p = cam.CFrame.Position
+            cam.CFrame = CFrame.new(p, p+look)
+        end
+    end)
+end
+
+task.spawn(function()
+    if not pGui then return end
+
+    local old = pGui:FindFirstChild("__MrDonFPS")
+    if old then old:Destroy() end
+
+    local sg = Instance.new("ScreenGui")
+    sg.Name            = "__MrDonFPS"
+    sg.ResetOnSpawn    = false
+    sg.DisplayOrder    = 999
+    sg.IgnoreGuiInset  = true
+    sg.Parent          = pGui
+
+    local frame = Instance.new("Frame")
+    frame.Size              = UDim2.new(0, 130, 0, 34)
+    frame.Position          = UDim2.new(1, -138, 0, 8)
+    frame.BackgroundColor3  = Color3.fromRGB(8, 8, 12)
+    frame.BackgroundTransparency = 0.25
+    frame.BorderSizePixel   = 0
+    frame.Parent            = sg
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 17)
+
+    local bar = Instance.new("Frame")
+    bar.Size             = UDim2.new(0, 4, 0, 22)
+    bar.Position         = UDim2.new(0, 7, 0.5, -11)
+    bar.BackgroundColor3 = Color3.fromRGB(0, 200, 120)
+    bar.BorderSizePixel  = 0
+    bar.Parent           = frame
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size              = UDim2.new(1, -18, 1, 0)
+    lbl.Position          = UDim2.new(0, 18, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3        = Color3.fromRGB(230, 230, 230)
+    lbl.Font              = Enum.Font.GothamBold
+    lbl.TextSize          = 14
+    lbl.TextXAlignment    = Enum.TextXAlignment.Left
+    lbl.Text              = "YingSeo FPS --"
+    lbl.Parent            = frame
+
+    local dragging, dragStart, startPos = false, nil, nil
+    frame.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = inp.Position
+            startPos  = frame.Position
+        end
+    end)
+    frame.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    game:GetService("UserInputService").InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
+                      or inp.UserInputType == Enum.UserInputType.Touch) then
+            local delta = inp.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    local samples, elapsed = 0, 0
+    local COLOR_HI  = Color3.fromRGB(0, 220, 120)
+    local COLOR_MID = Color3.fromRGB(255, 200, 0)
+    local COLOR_LO  = Color3.fromRGB(255, 60, 60)
+
+    Run.RenderStepped:Connect(function(dt)
+        samples = samples + 1
+        elapsed = elapsed + dt
+        if elapsed >= 0.5 then
+            local fps = math.round(samples / elapsed)
+            lbl.Text = "YingSeo FPS " .. fps
+            bar.BackgroundColor3 = fps >= 50 and COLOR_HI
+                                 or fps >= 30 and COLOR_MID
+                                 or COLOR_LO
+            samples, elapsed = 0, 0
+        end
+    end)
+end)
 
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[MrDon] Script loaded — Delta X / Blox Fruits")
+print("[YingSeo] Loaded — Delta X / Blox Fruits")
