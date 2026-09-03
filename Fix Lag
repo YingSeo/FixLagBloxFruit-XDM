@@ -1,4 +1,4 @@
--- [[ MrDon - Optimized Client Utilities (Fixed Jump Gravity) ]]
+-- [[ MrDon - Optimized Client Utilities (Fixed Invisible Water Floor) ]]
 local Plr      = game:GetService("Players")
 local WS       = game:GetService("Workspace")
 local Lgt      = game:GetService("Lighting")
@@ -337,8 +337,9 @@ end
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── WATER WALK PLATFORM (SỬA LỖI MẤT TRỌNG LỰC) ──────────────
-local SEA_LEVEL = 0
+-- ── INVISIBLE WATER WALK FLOOR (SÀN TÀNG HÌNH ĐỨNG TẠI CHỖ) ──────
+local SEA_LEVEL  = 0
+local FLOOR_SIZE = Vector3.new(100, 2, 100)
 local currentFloor = nil
 local floorConn = nil
 
@@ -360,45 +361,50 @@ local function spawnFloor(char)
     local hum  = char:WaitForChild("Humanoid", 5)
     if not root or not hum then return end
 
+    -- Tắt trạng thái bơi và leo trèo
     pcall(function()
         hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
         hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
     end)
 
-    -- Đổi sàn thành kích thước khổng lồ để không phải dịch chuyển mỗi frame
+    -- Tạo sàn tàng hình 100%
     local floor = Instance.new("Part")
     floor.Name            = "__WaterFloor"
-    floor.Size            = Vector3.new(10000, 5, 10000)
-    floor.Transparency    = 1
+    floor.Size            = FLOOR_SIZE
+    floor.Transparency    = 1 -- Trong suốt hoàn toàn
     floor.CanCollide      = true
     floor.Anchored        = true
     floor.CastShadow      = false
     floor.CanTouch        = false
     floor.CanQuery        = false
-    floor.Massless        = true
     floor.Material        = Enum.Material.SmoothPlastic
     
-    local floorCenterY = SEA_LEVEL - 2.5
-    floor.CFrame = CFrame.new(root.Position.X, floorCenterY, root.Position.Z)
+    -- Đặt mặt trên sàn phẳng chuẩn mực nước Y = 0
+    local floorY = SEA_LEVEL - (FLOOR_SIZE.Y / 2)
+    floor.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z)
     floor.Parent = WS
 
     currentFloor = floor
 
-    floorConn = Run.Stepped:Connect(function()
-        if not (floor and floor.Parent and root and root.Parent) then
+    -- Cập nhật di chuyển sàn thông minh
+    floorConn = Run.Heartbeat:Connect(function()
+        if not (floor and floor.Parent and root and root.Parent and hum and hum.Health > 0) then
             removeFloor()
             return
         end
         
-        local state = hum:GetState()
-        if state == Enum.HumanoidStateType.Swimming then
+        -- Ép trạng thái về Running nếu game tự chuyển Swimming
+        if hum:GetState() == Enum.HumanoidStateType.Swimming then
             hum:ChangeState(Enum.HumanoidStateType.Running)
         end
 
-        -- CHỈ cập nhật vị trí sàn khi nhân vật đã đi rất xa khỏi tâm sàn (tránh lỗi physics CFrame liên tục)
-        local dist = Vector2.new(root.Position.X, root.Position.Z) - Vector2.new(floor.Position.X, floor.Position.Z)
-        if dist.Magnitude > 3000 then
-            floor.CFrame = CFrame.new(root.Position.X, floorCenterY, root.Position.Z)
+        -- Tính khoảng cách phẳng (X, Z) giữa nhân vật và tâm sàn hiện tại
+        local charPos2D  = Vector2.new(root.Position.X, root.Position.Z)
+        local floorPos2D = Vector2.new(floor.Position.X, floor.Position.Z)
+
+        -- Chỉ di chuyển sàn khi nhân vật đi ra cách tâm quá 25 studs (chưa đến mép sàn 100x100)
+        if (charPos2D - floorPos2D).Magnitude > 25 then
+            floor.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z)
         end
     end)
 
@@ -572,13 +578,43 @@ task.spawn(function()
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = btn
 
-    btn.MouseButton1Click:Connect(function()
-        btn.Text = "Joining..."
-        if #Plr:GetPlayers() <= 1 then
-            TS:Teleport(game.PlaceId, LP)
-        else
-            TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+    local isRejoining = false
+
+    TS.TeleportInitFailed:Connect(function(player)
+        if player == LP then
+            btn.Text = "Retry..."
+            pcall(function() TS:Teleport(game.PlaceId, LP) end)
         end
+    end)
+
+    btn.MouseButton1Click:Connect(function()
+        if isRejoining then return end
+        isRejoining = true
+        btn.Text = "Joining..."
+
+        task.spawn(function()
+            local ok = pcall(function()
+                if #Plr:GetPlayers() <= 1 then
+                    TS:Teleport(game.PlaceId, LP)
+                else
+                    TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+                end
+            end)
+
+            if not ok then
+                btn.Text = "Fallback..."
+                pcall(function() TS:Teleport(game.PlaceId, LP) end)
+            end
+
+            task.wait(4)
+            if isRejoining then
+                btn.Text = "Force Join"
+                pcall(function() TS:Teleport(game.PlaceId, LP) end)
+                task.wait(2)
+                isRejoining = false
+                btn.Text = "Rejoin"
+            end
+        end)
     end)
 end)
 
