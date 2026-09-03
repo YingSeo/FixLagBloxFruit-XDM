@@ -1,102 +1,78 @@
+--// Blox Fruits - Anti Freeze Map Optimizer
+--// Giữ: NPC / Player / Boat / Ship
+--// Ẩn: phần map không cần thiết
+--// Không Destroy object
+--// Chia batch để tránh freeze khi bật
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
 --------------------------------------------------
--- CẤU HÌNH
+-- CONFIG
 --------------------------------------------------
 
 local ENABLED = true
 
--- Tên object/model chắc chắn không được ẩn
-local KEEP_NAMES = {
-    Camera = true,
-    Terrain = true,
+-- Số object xử lý mỗi lượt.
+-- Tăng = nhanh hơn nhưng dễ giật hơn.
+-- Giảm = mượt hơn nhưng lâu hơn.
+local BATCH_SIZE = 150
 
-    -- Các container NPC thường gặp
-    Enemies = true,
-    Enemy = true,
-    NPCs = true,
-    NPC = true,
-    Characters = true,
-
-    -- Container thuyền
-    Boats = true,
-    Boat = true,
-    Ships = true,
-    Ship = true,
-}
+-- Nghỉ giữa các batch để Roblox không bị nghẽn CPU
+local BATCH_DELAY = 0.03
 
 --------------------------------------------------
--- KIỂM TRA NPC
+-- CACHE
 --------------------------------------------------
 
-local function isNPCOrCharacter(obj)
+local protectedModels = {}
+local processed = {}
+
+--------------------------------------------------
+-- TÌM MODEL CHA
+--------------------------------------------------
+
+local function findProtectedModel(obj)
     local current = obj
 
     while current and current ~= Workspace do
         if current:IsA("Model") then
-            -- Có Humanoid = NPC hoặc Character
+
             if current:FindFirstChildOfClass("Humanoid") then
-                return true
+                return current
             end
 
             local name = string.lower(current.Name)
+
+            if string.find(name, "boat", 1, true)
+                or string.find(name, "ship", 1, true) then
+                return current
+            end
 
             if name == "enemies"
                 or name == "enemy"
-                or name == "npcs"
                 or name == "npc"
+                or name == "npcs"
                 or name == "characters" then
-                return true
-            end
-        end
-
-        current = current.Parent
-    end
-
-    return false
-end
-
---------------------------------------------------
--- KIỂM TRA THUYỀN
---------------------------------------------------
-
-local function isBoatOrShip(obj)
-    local current = obj
-
-    while current and current ~= Workspace do
-        if current:IsA("Model") then
-
-            local name = string.lower(current.Name)
-
-            -- Bắt model có chữ boat / ship
-            if string.find(name, "boat", 1, true)
-                or string.find(name, "ship", 1, true) then
-                return true
+                return current
             end
 
-            -- Thuyền thường có VehicleSeat
+            -- Thuyền thường có seat
             if current:FindFirstChildWhichIsA("VehicleSeat", true) then
-                return true
-            end
-
-            -- Một số thuyền sử dụng Seat
-            local seat = current:FindFirstChildWhichIsA("Seat", true)
-            if seat then
-                return true
+                return current
             end
         end
 
         current = current.Parent
     end
 
-    return false
+    return nil
 end
 
 --------------------------------------------------
--- KIỂM TRA OBJECT CẦN GIỮ
+-- KIỂM TRA OBJECT CÓ ĐƯỢC GIỮ KHÔNG
 --------------------------------------------------
 
 local function shouldKeep(obj)
@@ -105,24 +81,29 @@ local function shouldKeep(obj)
         return true
     end
 
-    -- Tên được whitelist
-    if KEEP_NAMES[obj.Name] then
-        return true
-    end
-
-    -- NPC / Player
-    if isNPCOrCharacter(obj) then
-        return true
-    end
-
-    -- Thuyền
-    if isBoatOrShip(obj) then
-        return true
-    end
-
-    -- Character của người chơi
+    -- Character người chơi
     if LocalPlayer.Character
         and obj:IsDescendantOf(LocalPlayer.Character) then
+        return true
+    end
+
+    -- Camera / Terrain
+    if obj.Name == "Camera" or obj == Workspace.Terrain then
+        return true
+    end
+
+    -- Đã cache model bảo vệ
+    for model in pairs(protectedModels) do
+        if obj:IsDescendantOf(model) or obj == model then
+            return true
+        end
+    end
+
+    -- Tìm model NPC / Boat / Ship
+    local protected = findProtectedModel(obj)
+
+    if protected then
+        protectedModels[protected] = true
         return true
     end
 
@@ -130,16 +111,22 @@ local function shouldKeep(obj)
 end
 
 --------------------------------------------------
--- ẨN MAP
+-- ẨN OBJECT NHẸ
 --------------------------------------------------
 
-local function optimize(obj)
+local function optimizeObject(obj)
 
     if not ENABLED then
         return
     end
 
-    -- Tuyệt đối không đụng NPC / Character / Boat
+    if processed[obj] then
+        return
+    end
+
+    processed[obj] = true
+
+    -- Không chạm NPC / Player / Boat
     if shouldKeep(obj) then
         return
     end
@@ -149,30 +136,24 @@ local function optimize(obj)
     ------------------------------------------------
 
     if obj:IsA("BasePart") then
+        -- LocalTransparencyModifier chỉ ảnh hưởng client
         obj.LocalTransparencyModifier = 1
 
-        -- giảm physics query
-        obj.CanCollide = false
-        obj.CanTouch = false
-        obj.CanQuery = false
-
-        -- không render shadow
+        -- Chỉ bỏ shadow, không động physics
         obj.CastShadow = false
-    end
 
     ------------------------------------------------
-    -- DECAL / TEXTURE
+    -- TEXTURE / DECAL
     ------------------------------------------------
 
-    if obj:IsA("Decal") or obj:IsA("Texture") then
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
         obj.Transparency = 1
-    end
 
     ------------------------------------------------
-    -- EFFECT
+    -- PARTICLE / EFFECT
     ------------------------------------------------
 
-    if obj:IsA("ParticleEmitter")
+    elseif obj:IsA("ParticleEmitter")
         or obj:IsA("Trail")
         or obj:IsA("Beam")
         or obj:IsA("Smoke")
@@ -180,44 +161,61 @@ local function optimize(obj)
         or obj:IsA("Sparkles") then
 
         obj.Enabled = false
-    end
 
     ------------------------------------------------
     -- LIGHT
     ------------------------------------------------
 
-    if obj:IsA("PointLight")
+    elseif obj:IsA("PointLight")
         or obj:IsA("SpotLight")
         or obj:IsA("SurfaceLight") then
 
         obj.Enabled = false
-    end
 
     ------------------------------------------------
-    -- GUI TRONG MAP
+    -- GUI / HIGHLIGHT
     ------------------------------------------------
 
-    if obj:IsA("BillboardGui")
-        or obj:IsA("SurfaceGui") then
+    elseif obj:IsA("BillboardGui")
+        or obj:IsA("SurfaceGui")
+        or obj:IsA("Highlight") then
 
-        obj.Enabled = false
-    end
-
-    ------------------------------------------------
-    -- HIGHLIGHT
-    ------------------------------------------------
-
-    if obj:IsA("Highlight") then
         obj.Enabled = false
     end
 end
 
 --------------------------------------------------
--- QUÉT MAP HIỆN TẠI
+-- XỬ LÝ THEO BATCH
 --------------------------------------------------
 
-for _, obj in ipairs(Workspace:GetDescendants()) do
-    optimize(obj)
+local function optimizeWorkspace()
+
+    local descendants = Workspace:GetDescendants()
+    local total = #descendants
+
+    print("Map Optimizer: found", total, "objects")
+
+    local index = 1
+
+    while index <= total and ENABLED do
+
+        local finish = math.min(index + BATCH_SIZE - 1, total)
+
+        for i = index, finish do
+            local obj = descendants[i]
+
+            if obj and obj.Parent then
+                optimizeObject(obj)
+            end
+        end
+
+        index = finish + 1
+
+        -- Nhường frame cho Roblox
+        task.wait(BATCH_DELAY)
+    end
+
+    print("Map Optimizer: finished")
 end
 
 --------------------------------------------------
@@ -225,15 +223,36 @@ end
 --------------------------------------------------
 
 Workspace.DescendantAdded:Connect(function(obj)
+
+    if not ENABLED then
+        return
+    end
+
+    -- Không xử lý ngay lập tức.
+    -- Đợi 1 frame tránh spike CPU khi nhiều object spawn cùng lúc.
     task.defer(function()
-        optimize(obj)
+
+        if not obj or not obj.Parent then
+            return
+        end
+
+        optimizeObject(obj)
     end)
 end)
 
-print("================================")
-print(" Blox Fruits Map Optimizer")
-print(" NPC     : KEPT")
-print(" PLAYER  : KEPT")
-print(" BOAT    : KEPT")
-print(" MAP     : HIDDEN")
-print("================================")
+--------------------------------------------------
+-- CHẠY
+--------------------------------------------------
+
+task.spawn(function()
+    optimizeWorkspace()
+end)
+
+print("--------------------------------")
+print(" Map Optimizer")
+print(" NPC    : KEEP")
+print(" PLAYER : KEEP")
+print(" BOAT   : KEEP")
+print(" SHIP   : KEEP")
+print(" BATCH  :", BATCH_SIZE)
+print("--------------------------------")
