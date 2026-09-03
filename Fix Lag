@@ -3,40 +3,52 @@ local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
+--------------------------------------------------
+-- CẤU HÌNH
+--------------------------------------------------
+
 local ENABLED = true
 
--- Những object này luôn được giữ lại
+-- Tên object/model chắc chắn không được ẩn
 local KEEP_NAMES = {
     Camera = true,
     Terrain = true,
+
+    -- Các container NPC thường gặp
+    Enemies = true,
+    Enemy = true,
+    NPCs = true,
+    NPC = true,
+    Characters = true,
+
+    -- Container thuyền
+    Boats = true,
+    Boat = true,
+    Ships = true,
+    Ship = true,
 }
 
-local function isProtected(instance)
-    if not instance then
-        return true
-    end
+--------------------------------------------------
+-- KIỂM TRA NPC
+--------------------------------------------------
 
-    -- Giữ Camera / Terrain
-    if KEEP_NAMES[instance.Name] then
-        return true
-    end
-
-    -- Giữ tất cả Character/NPC có Humanoid
-    local current = instance
+local function isNPCOrCharacter(obj)
+    local current = obj
 
     while current and current ~= Workspace do
         if current:IsA("Model") then
+            -- Có Humanoid = NPC hoặc Character
             if current:FindFirstChildOfClass("Humanoid") then
                 return true
             end
 
-            -- Các folder thường chứa NPC
             local name = string.lower(current.Name)
 
             if name == "enemies"
-                or name == "characters"
+                or name == "enemy"
                 or name == "npcs"
-                or name == "npc" then
+                or name == "npc"
+                or name == "characters" then
                 return true
             end
         end
@@ -44,33 +56,123 @@ local function isProtected(instance)
         current = current.Parent
     end
 
-    -- Giữ character của người chơi
-    if LocalPlayer.Character and instance:IsDescendantOf(LocalPlayer.Character) then
+    return false
+end
+
+--------------------------------------------------
+-- KIỂM TRA THUYỀN
+--------------------------------------------------
+
+local function isBoatOrShip(obj)
+    local current = obj
+
+    while current and current ~= Workspace do
+        if current:IsA("Model") then
+
+            local name = string.lower(current.Name)
+
+            -- Bắt model có chữ boat / ship
+            if string.find(name, "boat", 1, true)
+                or string.find(name, "ship", 1, true) then
+                return true
+            end
+
+            -- Thuyền thường có VehicleSeat
+            if current:FindFirstChildWhichIsA("VehicleSeat", true) then
+                return true
+            end
+
+            -- Một số thuyền sử dụng Seat
+            local seat = current:FindFirstChildWhichIsA("Seat", true)
+            if seat then
+                return true
+            end
+        end
+
+        current = current.Parent
+    end
+
+    return false
+end
+
+--------------------------------------------------
+-- KIỂM TRA OBJECT CẦN GIỮ
+--------------------------------------------------
+
+local function shouldKeep(obj)
+
+    if not obj then
+        return true
+    end
+
+    -- Tên được whitelist
+    if KEEP_NAMES[obj.Name] then
+        return true
+    end
+
+    -- NPC / Player
+    if isNPCOrCharacter(obj) then
+        return true
+    end
+
+    -- Thuyền
+    if isBoatOrShip(obj) then
+        return true
+    end
+
+    -- Character của người chơi
+    if LocalPlayer.Character
+        and obj:IsDescendantOf(LocalPlayer.Character) then
         return true
     end
 
     return false
 end
 
-local function hideObject(obj)
-    if isProtected(obj) then
+--------------------------------------------------
+-- ẨN MAP
+--------------------------------------------------
+
+local function optimize(obj)
+
+    if not ENABLED then
         return
     end
 
-    -- Part / MeshPart / Union / SpawnLocation...
+    -- Tuyệt đối không đụng NPC / Character / Boat
+    if shouldKeep(obj) then
+        return
+    end
+
+    ------------------------------------------------
+    -- PART
+    ------------------------------------------------
+
     if obj:IsA("BasePart") then
         obj.LocalTransparencyModifier = 1
+
+        -- giảm physics query
         obj.CanCollide = false
         obj.CanTouch = false
         obj.CanQuery = false
+
+        -- không render shadow
         obj.CastShadow = false
+    end
 
-    -- Decal / Texture
-    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+    ------------------------------------------------
+    -- DECAL / TEXTURE
+    ------------------------------------------------
+
+    if obj:IsA("Decal") or obj:IsA("Texture") then
         obj.Transparency = 1
+    end
 
-    -- Các effect nặng
-    elseif obj:IsA("ParticleEmitter")
+    ------------------------------------------------
+    -- EFFECT
+    ------------------------------------------------
+
+    if obj:IsA("ParticleEmitter")
         or obj:IsA("Trail")
         or obj:IsA("Beam")
         or obj:IsA("Smoke")
@@ -78,27 +180,60 @@ local function hideObject(obj)
         or obj:IsA("Sparkles") then
 
         obj.Enabled = false
+    end
 
-    -- Highlight
-    elseif obj:IsA("Highlight") then
+    ------------------------------------------------
+    -- LIGHT
+    ------------------------------------------------
+
+    if obj:IsA("PointLight")
+        or obj:IsA("SpotLight")
+        or obj:IsA("SurfaceLight") then
+
         obj.Enabled = false
+    end
 
-    -- GUI đặt trong map
-    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+    ------------------------------------------------
+    -- GUI TRONG MAP
+    ------------------------------------------------
+
+    if obj:IsA("BillboardGui")
+        or obj:IsA("SurfaceGui") then
+
+        obj.Enabled = false
+    end
+
+    ------------------------------------------------
+    -- HIGHLIGHT
+    ------------------------------------------------
+
+    if obj:IsA("Highlight") then
         obj.Enabled = false
     end
 end
 
--- Quét map hiện tại
+--------------------------------------------------
+-- QUÉT MAP HIỆN TẠI
+--------------------------------------------------
+
 for _, obj in ipairs(Workspace:GetDescendants()) do
-    hideObject(obj)
+    optimize(obj)
 end
 
--- Những object map sinh ra sau đó cũng bị ẩn
+--------------------------------------------------
+-- OBJECT MỚI SPAWN
+--------------------------------------------------
+
 Workspace.DescendantAdded:Connect(function(obj)
     task.defer(function()
-        hideObject(obj)
+        optimize(obj)
     end)
 end)
 
-print("Blox Fruits Map Optimizer: ON")
+print("================================")
+print(" Blox Fruits Map Optimizer")
+print(" NPC     : KEPT")
+print(" PLAYER  : KEPT")
+print(" BOAT    : KEPT")
+print(" MAP     : HIDDEN")
+print("================================")
