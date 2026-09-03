@@ -1,41 +1,22 @@
-local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
-local KEEP_DELAY = 0.01
 
-local function isBoat(model)
-    if not model:IsA("Model") then
-        return false
-    end
+local DELETE_BATCH = 2000
+local DELETE_YIELD = 0.01
 
-    local n = string.lower(model.Name)
+local protected = {}
+local queue = {}
+local deleting = true
 
-    if n:find("boat", 1, true)
-        or n:find("ship", 1, true)
-        or n:find("raft", 1, true)
-        or n:find("dinghy", 1, true)
-        or n:find("sail", 1, true) then
-        return true
-    end
+local function nameHas(name, ...)
+    name = string.lower(name)
 
-    return model:FindFirstChildWhichIsA("VehicleSeat", true) ~= nil
-end
-
-local function isCharacter(model)
-    return model:IsA("Model")
-        and model:FindFirstChildOfClass("Humanoid") ~= nil
-end
-
-local function hasProtectedDescendant(obj)
-    if obj:IsA("Model") then
-        if isCharacter(obj) or isBoat(obj) then
-            return true
-        end
-    end
-
-    for _, child in ipairs(obj:GetChildren()) do
-        if hasProtectedDescendant(child) then
+    for i = 1, select("#", ...) do
+        local word = string.lower(select(i, ...))
+        if string.find(name, word, 1, true) then
             return true
         end
     end
@@ -43,63 +24,155 @@ local function hasProtectedDescendant(obj)
     return false
 end
 
-local function cleanNode(obj)
-    if not obj or not obj.Parent then
+local function isProtectedModel(obj)
+    if not obj:IsA("Model") then
+        return false
+    end
+
+    if obj:FindFirstChildOfClass("Humanoid") then
+        return true
+    end
+
+    if obj:FindFirstChildWhichIsA("VehicleSeat", true) then
+        return true
+    end
+
+    if nameHas(obj.Name, "boat", "ship", "raft", "dinghy") then
+        return true
+    end
+
+    if LocalPlayer.Character and obj == LocalPlayer.Character then
+        return true
+    end
+
+    return false
+end
+
+local function markProtected(obj)
+    if not obj:IsA("Model") then
         return
     end
 
-    if obj:IsA("Model") and (isCharacter(obj) or isBoat(obj)) then
+    if not isProtectedModel(obj) then
         return
     end
 
-    if not hasProtectedDescendant(obj) then
-        obj:Destroy()
-        return
-    end
+    local current = obj
 
-    for _, child in ipairs(obj:GetChildren()) do
-        cleanNode(child)
-        task.wait(KEEP_DELAY)
+    while current and current ~= Workspace do
+        protected[current] = true
+        current = current.Parent
     end
 end
 
-local function cleanContainer(container)
-    if not container then
-        return
-    end
-
-    for _, child in ipairs(container:GetChildren()) do
-        cleanNode(child)
-        task.wait()
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    if obj:IsA("Model") then
+        markProtected(obj)
     end
 end
 
-local map = Workspace:FindFirstChild("Map")
+local function destroyTree(parent)
+    local children = parent:GetChildren()
 
-if map then
-    task.spawn(function()
-        cleanContainer(map)
-    end)
+    for i = 1, #children do
+        local obj = children[i]
+
+        if obj and obj.Parent then
+            if not protected[obj] then
+                obj:Destroy()
+            else
+                destroyTree(obj)
+            end
+        end
+
+        if i % DELETE_BATCH == 0 then
+            task.wait(DELETE_YIELD)
+        end
+    end
 end
 
-local possibleMaps = {
-    Workspace:FindFirstChild("Environment"),
-    Workspace:FindFirstChild("Map2"),
-    Workspace:FindFirstChild("World"),
+local keepContainers = {
+    Camera = true,
+    Terrain = true,
+    CurrentCamera = true
 }
 
-for _, container in ipairs(possibleMaps) do
-    if container and container ~= map then
-        task.spawn(function()
-            cleanContainer(container)
-        end)
+task.spawn(function()
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if not keepContainers[obj.Name] and not protected[obj] then
+            obj:Destroy()
+        elseif protected[obj] then
+            destroyTree(obj)
+        end
+
+        task.wait()
     end
+
+    deleting = false
+end)
+
+local floor = Instance.new("Part")
+floor.Name = "ClientInvisibleFloor"
+floor.Anchored = true
+floor.CanCollide = true
+floor.CanTouch = false
+floor.CanQuery = true
+floor.Transparency = 1
+floor.Size = Vector3.new(2048, 1, 2048)
+floor.Parent = Workspace
+
+local function updateFloor()
+    local character = LocalPlayer.Character
+    if not character then
+        return
+    end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root then
+        return
+    end
+
+    local p = root.Position
+    floor.CFrame = CFrame.new(p.X, p.Y - 3.1, p.Z)
 end
 
-for _, player in ipairs(Players:GetPlayers()) do
-    if player.Character then
-        player.Character.Archivable = true
-    end
-end
+RunService.Heartbeat:Connect(updateFloor)
 
-print("FULL MAP CLEANER: ON")
+local gui = Instance.new("ScreenGui")
+gui.Name = "ClientFPS"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 125, 0, 38)
+frame.Position = UDim2.new(1, -135, 0, 10)
+frame.BackgroundTransparency = 0.25
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local label = Instance.new("TextLabel")
+label.Size = UDim2.new(1, -10, 1, -6)
+label.Position = UDim2.new(0, 5, 0, 3)
+label.BackgroundTransparency = 1
+label.Text = "FPS: --"
+label.TextScaled = true
+label.Font = Enum.Font.GothamBold
+label.TextColor3 = Color3.new(1, 1, 1)
+label.Parent = frame
+
+local frames = 0
+local elapsed = 0
+
+RunService.RenderStepped:Connect(function(dt)
+    frames += 1
+    elapsed += dt
+
+    if elapsed >= 0.5 then
+        local fps = math.floor(frames / elapsed + 0.5)
+        label.Text = "FPS: " .. fps
+
+        frames = 0
+        elapsed = 0
+    end
+end)
