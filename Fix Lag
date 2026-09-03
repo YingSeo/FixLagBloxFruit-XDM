@@ -105,27 +105,38 @@ Lgt.ChildAdded:Connect(function(o)
     end
 end)
 
--- ── WATER NUKE + SOLID FLOOR ──────────────────────────────────
-local FLOOR_Y    = 0
-local FLOOR_NAME = "__MrDonSea"
-local SNAP_Y     = 3.5
-local SNAP_LIMIT = FLOOR_Y + 1.5
+-- ── SOLID SEA FLOOR ───────────────────────────────────────────
+--[[
+    Nguyên tắc chống jitter:
+    - Floor CanCollide=true xử lý collision tự nhiên qua engine
+    - KHÔNG snap CFrame mỗi frame → không tug-of-war với physics
+    - Chỉ dùng emergency snap khi Y < EMERGENCY_Y (rớt hẳn)
+    - SetStateEnabled Swimming=false để engine không apply swim physics
+    - Zero vertical velocity CHỈ 1 lần khi detect swimming, không loop
+]]
+
+local FLOOR_Y     = 1.5   -- mặt trên floor, nhân vật đứng ở đây
+local FLOOR_NAME  = "__MrDonSea"
+local EMERGENCY_Y = -10   -- chỉ snap khi rớt thực sự sâu
 
 local function buildFloor()
-    if WS:FindFirstChild(FLOOR_NAME) then return end
+    local existing = WS:FindFirstChild(FLOOR_NAME)
+    if existing then safeKill(existing) end
+
     local p = Instance.new("Part")
-    p.Name             = FLOOR_NAME
-    p.Size             = Vector3.new(9e4, 6, 9e4)
-    p.CFrame           = CFrame.new(0, FLOOR_Y - 3, 0)
-    p.Transparency     = 1
-    p.Anchored         = true
-    p.CanCollide       = true
-    p.CanTouch         = false
-    p.CanQuery         = false
-    p.CastShadow       = false
-    p.Massless         = true
-    p.Material         = Enum.Material.SmoothPlastic
-    p.Parent           = WS
+    p.Name         = FLOOR_NAME
+    p.Size         = Vector3.new(9e4, 10, 9e4)
+    -- Đặt sao cho mặt TRÊN của part nằm tại Y = FLOOR_Y
+    p.CFrame       = CFrame.new(0, FLOOR_Y - 5, 0)
+    p.Transparency = 1
+    p.Anchored     = true
+    p.CanCollide   = true
+    p.CanTouch     = false
+    p.CanQuery     = false
+    p.CastShadow   = false
+    p.Massless     = true
+    p.Material     = Enum.Material.SmoothPlastic
+    p.Parent       = WS
 end
 
 local function nukeTerrainWater()
@@ -139,9 +150,8 @@ local function nukeTerrainWater()
     local cl = t:FindFirstChildOfClass("Clouds")
     if cl then safeKill(cl) end
     pcall(function()
-        local ext = t.MaxExtents
-        local mn = ext.Min
-        local mx = ext.Max
+        local ext  = t.MaxExtents
+        local mn,mx = ext.Min, ext.Max
         local rMin = Vector3.new(math.max(mn.X,-6000),math.max(mn.Y,-300),math.max(mn.Z,-6000))
         local rMax = Vector3.new(math.min(mx.X, 6000),math.min(mx.Y, 80), math.min(mx.Z, 6000))
         local region = Region3.new(rMin,rMax):ExpandToGrid(4)
@@ -176,12 +186,34 @@ local function nukeWaterParts()
     end
 end
 
-local function disableSwim(char)
+-- Disable swim state một lần khi char load, không loop
+local function setupCharWater(char)
     if not char then return end
     local hum = char:WaitForChild("Humanoid",5)
     if not hum then return end
     pcall(function()
         hum:SetStateEnabled(Enum.HumanoidStateType.Swimming,false)
+        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown,true)
+        hum:SetStateEnabled(Enum.HumanoidStateType.Landed,true)
+    end)
+
+    -- Zero velocity một lần khi detect Swimming, rồi thôi
+    hum.StateChanged:Connect(function(_,new)
+        if new == Enum.HumanoidStateType.Swimming then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                pcall(function()
+                    root.AssemblyLinearVelocity = Vector3.new(
+                        root.AssemblyLinearVelocity.X,
+                        0,
+                        root.AssemblyLinearVelocity.Z
+                    )
+                end)
+            end
+            pcall(function()
+                hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
     end)
 end
 
@@ -189,8 +221,8 @@ task.spawn(function()
     buildFloor()
     nukeTerrainWater()
     nukeWaterParts()
-    if LP.Character then disableSwim(LP.Character) end
-    LP.CharacterAdded:Connect(function(c) task.spawn(disableSwim,c) end)
+    if LP.Character then setupCharWater(LP.Character) end
+    LP.CharacterAdded:Connect(function(c) task.spawn(setupCharWater,c) end)
 end)
 
 WS.DescendantAdded:Connect(function(o)
@@ -202,48 +234,28 @@ WS.DescendantAdded:Connect(function(o)
     end)
 end)
 
--- ── WATER SNAP — bind PreSimulation (chạy trước physics + camera) ──
---[[
-    Dùng Stepped (PreSimulation) thay RenderStepped:
-    Stepped chạy TRƯỚC khi Roblox tính physics frame,
-    nên nhân vật không bao giờ lọt xuống dưới SNAP_LIMIT
-    kể cả 1 frame. Camera cũng không thấy lún.
-]]
-Run.Stepped:Connect(function()
+-- Emergency snap — chỉ kích hoạt khi rớt thật sự sâu (< -10)
+-- Không chạy mỗi frame, dùng heartbeat thay stepped để nhẹ hơn
+Run.Heartbeat:Connect(function()
     local char = LP.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
     local hum  = char:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return end
-
-    local pos   = root.Position
-    local state = hum:GetState()
-    local underwater = pos.Y < SNAP_LIMIT
-                    or state == Enum.HumanoidStateType.Swimming
-
-    if underwater then
+    if root.Position.Y < EMERGENCY_Y then
         pcall(function()
             local _,ry,_ = root.CFrame:ToEulerAnglesYXZ()
-            root.CFrame = CFrame.new(pos.X, SNAP_Y, pos.Z)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = CFrame.new(root.Position.X, FLOOR_Y + 5, root.Position.Z)
                         * CFrame.Angles(0,ry,0)
-            root.AssemblyLinearVelocity = Vector3.new(
-                root.AssemblyLinearVelocity.X,
-                math.max(root.AssemblyLinearVelocity.Y, 0),
-                root.AssemblyLinearVelocity.Z
-            )
         end)
         pcall(function()
-            hum:ChangeState(Enum.HumanoidStateType.Running)
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end)
     end
 end)
 
--- ── CAMERA LOCK — chạy RenderStepped để giữ camera không lún ──
---[[
-    Sau khi Stepped snap root lên, camera Roblox đôi khi
-    vẫn interpolate xuống 1 frame. Lock camera Y >= SNAP_Y
-    trong RenderStepped để đảm bảo không thấy lún dù 1ms.
-]]
+-- ── VFX PURGE ────────────────────────────────────────────────
 local function purgeCamera()
     local cam = WS.CurrentCamera
     if not cam then return end
@@ -252,32 +264,6 @@ local function purgeCamera()
     end
 end
 
-do
-    local prevLook = Vector3.new(0,0,-1)
-    Run.RenderStepped:Connect(function()
-        local cam = WS.CurrentCamera
-        if not cam then return end
-
-        purgeCamera()
-
-        local cf   = cam.CFrame
-        local look = cf.LookVector
-        if look ~= prevLook then
-            prevLook = look
-            local p = cf.Position
-            cam.CFrame = CFrame.new(p, p + look)
-        end
-
-        -- Lock camera không xuống dưới mặt nước
-        local camPos = cam.CFrame.Position
-        if camPos.Y < SNAP_Y then
-            local locked = Vector3.new(camPos.X, SNAP_Y + 1, camPos.Z)
-            cam.CFrame   = CFrame.new(locked, locked + cam.CFrame.LookVector)
-        end
-    end)
-end
-
--- ── VFX PURGE ────────────────────────────────────────────────
 task.spawn(function()
     local d = WS:GetDescendants()
     for i=1,#d do
@@ -321,18 +307,22 @@ local function paintBoat(model)
     task.spawn(function()
         for _,o in ipairs(model:GetDescendants()) do
             if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
-                safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                safeSet(o,"Color",BLACK)
+                safeSet(o,"Material",Enum.Material.SmoothPlastic)
             elseif o:IsA("Decal") or o:IsA("Texture") then
-                safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
+                safeSet(o,"Color3",BLACK)
+                safeSet(o,"Transparency",1)
             end
         end
         model.DescendantAdded:Connect(function(o)
             task.defer(function()
                 if not(o and o.Parent) then return end
                 if o:IsA("BasePart") or o:IsA("MeshPart") then
-                    safeSet(o,"Color",BLACK); safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                    safeSet(o,"Color",BLACK)
+                    safeSet(o,"Material",Enum.Material.SmoothPlastic)
                 elseif o:IsA("Decal") or o:IsA("Texture") then
-                    safeSet(o,"Color3",BLACK); safeSet(o,"Transparency",1)
+                    safeSet(o,"Color3",BLACK)
+                    safeSet(o,"Transparency",1)
                 end
             end)
         end)
@@ -353,8 +343,10 @@ local function uglyMob(model)
     task.spawn(function()
         for _,o in ipairs(model:GetDescendants()) do
             if o:IsA("BasePart") or o:IsA("MeshPart") or o:IsA("UnionOperation") then
-                safeSet(o,"Color",UGLY); safeSet(o,"Material",Enum.Material.SmoothPlastic)
-                safeSet(o,"Reflectance",0); safeSet(o,"CastShadow",false)
+                safeSet(o,"Color",UGLY)
+                safeSet(o,"Material",Enum.Material.SmoothPlastic)
+                safeSet(o,"Reflectance",0)
+                safeSet(o,"CastShadow",false)
             elseif o:IsA("Decal") or o:IsA("Texture") then
                 safeSet(o,"Transparency",1)
             elseif VFX[o.ClassName] then safeKill(o)
@@ -437,7 +429,8 @@ local function killDmgGui(o)
     if o:IsA("BillboardGui") or o:IsA("ScreenGui")
     or o:IsA("SurfaceGui")   or o:IsA("TextLabel")
     or o:IsA("Frame")        or o:IsA("ImageLabel") then
-        safeSet(o,"Enabled",false); safeSet(o,"Visible",false)
+        safeSet(o,"Enabled",false)
+        safeSet(o,"Visible",false)
     end
 end
 if GUI then
@@ -498,6 +491,22 @@ end
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
+-- ── CAMERA ANTI-SHAKE ────────────────────────────────────────
+do
+    local prevLook = Vector3.new(0,0,-1)
+    Run.RenderStepped:Connect(function()
+        local cam = WS.CurrentCamera
+        if not cam then return end
+        purgeCamera()
+        local look = cam.CFrame.LookVector
+        if look ~= prevLook then
+            prevLook = look
+            local p = cam.CFrame.Position
+            cam.CFrame = CFrame.new(p, p+look)
+        end
+    end)
+end
+
 -- ── FPS BAR ──────────────────────────────────────────────────
 task.spawn(function()
     if not GUI then return end
@@ -511,82 +520,72 @@ task.spawn(function()
     sg.IgnoreGuiInset = true
     pcall(function() sg.Parent = GUI end)
 
-    -- Outer card
     local card = Instance.new("Frame")
     card.Name                   = "FPSCard"
-    card.Size                   = UDim2.new(0, 130, 0, 42)
-    card.Position               = UDim2.new(1, -146, 0, 12)
-    card.BackgroundColor3       = Color3.fromRGB(10, 10, 14)
+    card.Size                   = UDim2.new(0,130,0,42)
+    card.Position               = UDim2.new(1,-146,0,12)
+    card.BackgroundColor3       = Color3.fromRGB(10,10,14)
     card.BackgroundTransparency = 0
     card.BorderSizePixel        = 0
     card.Active                 = true
     card.Parent                 = sg
     Instance.new("UICorner",card).CornerRadius = UDim.new(0,10)
 
-    -- Accent border stroke
     local stroke = Instance.new("UIStroke")
-    stroke.Color     = Color3.fromRGB(0, 210, 110)
-    stroke.Thickness = 1.2
+    stroke.Color           = Color3.fromRGB(0,210,110)
+    stroke.Thickness       = 1.2
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent    = card
+    stroke.Parent          = card
 
-    -- Left color pill
     local pill = Instance.new("Frame")
-    pill.Name             = "Pill"
-    pill.Size             = UDim2.new(0, 4, 0, 22)
-    pill.Position         = UDim2.new(0, 10, 0.5, -11)
-    pill.BackgroundColor3 = Color3.fromRGB(0, 210, 110)
+    pill.Size             = UDim2.new(0,4,0,22)
+    pill.Position         = UDim2.new(0,10,0.5,-11)
+    pill.BackgroundColor3 = Color3.fromRGB(0,210,110)
     pill.BorderSizePixel  = 0
     pill.Parent           = card
     Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0)
 
-    -- Label "FPS"
     local tag = Instance.new("TextLabel")
-    tag.Size                   = UDim2.new(0, 28, 0, 14)
-    tag.Position               = UDim2.new(0, 20, 0, 6)
+    tag.Size                   = UDim2.new(0,28,0,14)
+    tag.Position               = UDim2.new(0,20,0,6)
     tag.BackgroundTransparency = 1
-    tag.TextColor3             = Color3.fromRGB(120, 120, 140)
+    tag.TextColor3             = Color3.fromRGB(120,120,140)
     tag.Font                   = Enum.Font.GothamBold
     tag.TextSize               = 10
     tag.Text                   = "FPS"
     tag.TextXAlignment         = Enum.TextXAlignment.Left
     tag.Parent                 = card
 
-    -- Value label
     local val = Instance.new("TextLabel")
-    val.Size                   = UDim2.new(1, -22, 0, 20)
-    val.Position               = UDim2.new(0, 20, 0, 18)
+    val.Size                   = UDim2.new(1,-22,0,20)
+    val.Position               = UDim2.new(0,20,0,18)
     val.BackgroundTransparency = 1
-    val.TextColor3             = Color3.fromRGB(240, 240, 245)
+    val.TextColor3             = Color3.fromRGB(240,240,245)
     val.Font                   = Enum.Font.GothamBold
     val.TextSize               = 16
     val.Text                   = "--"
     val.TextXAlignment         = Enum.TextXAlignment.Left
     val.Parent                 = card
 
-    -- Mini sparkline bar track
     local track = Instance.new("Frame")
-    track.Name                   = "Track"
-    track.Size                   = UDim2.new(0, 54, 0, 4)
-    track.Position               = UDim2.new(1, -64, 0.5, -2)
-    track.BackgroundColor3       = Color3.fromRGB(35, 35, 45)
-    track.BorderSizePixel        = 0
-    track.Parent                 = card
+    track.Size             = UDim2.new(0,54,0,4)
+    track.Position         = UDim2.new(1,-64,0.5,-2)
+    track.BackgroundColor3 = Color3.fromRGB(35,35,45)
+    track.BorderSizePixel  = 0
+    track.Parent           = card
     Instance.new("UICorner",track).CornerRadius = UDim.new(1,0)
 
     local fill = Instance.new("Frame")
-    fill.Name             = "Fill"
-    fill.Size             = UDim2.new(1, 0, 1, 0)
-    fill.BackgroundColor3 = Color3.fromRGB(0, 210, 110)
+    fill.Size             = UDim2.new(1,0,1,0)
+    fill.BackgroundColor3 = Color3.fromRGB(0,210,110)
     fill.BorderSizePixel  = 0
     fill.Parent           = track
     Instance.new("UICorner",fill).CornerRadius = UDim.new(1,0)
 
-    -- Drag
     local dragging,dragStart,startPos = false,nil,nil
     card.InputBegan:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1
-        or inp.UserInputType == Enum.UserInputType.Touch then
+        if inp.UserInputType==Enum.UserInputType.MouseButton1
+        or inp.UserInputType==Enum.UserInputType.Touch then
             dragging=true; dragStart=inp.Position; startPos=card.Position
             inp.Changed:Connect(function()
                 if inp.UserInputState==Enum.UserInputState.End then dragging=false end
@@ -598,33 +597,29 @@ task.spawn(function()
         or inp.UserInputType==Enum.UserInputType.Touch) then
             local d = inp.Position - dragStart
             card.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y
+                startPos.X.Scale, startPos.X.Offset+d.X,
+                startPos.Y.Scale, startPos.Y.Offset+d.Y
             )
         end
     end)
 
-    -- FPS counter
     local fc,at = 0,0
     local C_HI  = Color3.fromRGB(0,210,110)
     local C_MID = Color3.fromRGB(255,185,0)
     local C_LO  = Color3.fromRGB(255,55,55)
-    local TARGET = 480
 
     Run.RenderStepped:Connect(function(dt)
         fc+=1; at+=dt
         if at >= 0.4 then
-            local fps  = math.round(fc/at)
-            local ratio= math.clamp(fps/TARGET, 0, 1)
-            local col  = (fps>=50 and C_HI) or (fps>=30 and C_MID) or C_LO
-
-            val.Text          = tostring(fps)
-            val.TextColor3    = col
+            local fps   = math.round(fc/at)
+            local ratio = math.clamp(fps/480,0,1)
+            local col   = (fps>=50 and C_HI) or (fps>=30 and C_MID) or C_LO
+            val.Text              = tostring(fps)
+            val.TextColor3        = col
             pill.BackgroundColor3 = col
             stroke.Color          = col
-            fill.Size         = UDim2.new(ratio, 0, 1, 0)
+            fill.Size             = UDim2.new(ratio,0,1,0)
             fill.BackgroundColor3 = col
-
             fc,at = 0,0
         end
     end)
@@ -634,4 +629,4 @@ end)
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[MrDon] Loaded — Anti-Sink v2 | Delta X | Blox Fruits")
+print("[MrDon] Loaded — No-Jitter Floor | Delta X | Blox Fruits")
