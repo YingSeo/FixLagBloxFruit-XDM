@@ -1,0 +1,104 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+local ENABLED = true
+
+-- Những object này luôn được giữ lại
+local KEEP_NAMES = {
+    Camera = true,
+    Terrain = true,
+}
+
+local function isProtected(instance)
+    if not instance then
+        return true
+    end
+
+    -- Giữ Camera / Terrain
+    if KEEP_NAMES[instance.Name] then
+        return true
+    end
+
+    -- Giữ tất cả Character/NPC có Humanoid
+    local current = instance
+
+    while current and current ~= Workspace do
+        if current:IsA("Model") then
+            if current:FindFirstChildOfClass("Humanoid") then
+                return true
+            end
+
+            -- Các folder thường chứa NPC
+            local name = string.lower(current.Name)
+
+            if name == "enemies"
+                or name == "characters"
+                or name == "npcs"
+                or name == "npc" then
+                return true
+            end
+        end
+
+        current = current.Parent
+    end
+
+    -- Giữ character của người chơi
+    if LocalPlayer.Character and instance:IsDescendantOf(LocalPlayer.Character) then
+        return true
+    end
+
+    return false
+end
+
+local function hideObject(obj)
+    if isProtected(obj) then
+        return
+    end
+
+    -- Part / MeshPart / Union / SpawnLocation...
+    if obj:IsA("BasePart") then
+        obj.LocalTransparencyModifier = 1
+        obj.CanCollide = false
+        obj.CanTouch = false
+        obj.CanQuery = false
+        obj.CastShadow = false
+
+    -- Decal / Texture
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
+        obj.Transparency = 1
+
+    -- Các effect nặng
+    elseif obj:IsA("ParticleEmitter")
+        or obj:IsA("Trail")
+        or obj:IsA("Beam")
+        or obj:IsA("Smoke")
+        or obj:IsA("Fire")
+        or obj:IsA("Sparkles") then
+
+        obj.Enabled = false
+
+    -- Highlight
+    elseif obj:IsA("Highlight") then
+        obj.Enabled = false
+
+    -- GUI đặt trong map
+    elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+        obj.Enabled = false
+    end
+end
+
+-- Quét map hiện tại
+for _, obj in ipairs(Workspace:GetDescendants()) do
+    hideObject(obj)
+end
+
+-- Những object map sinh ra sau đó cũng bị ẩn
+Workspace.DescendantAdded:Connect(function(obj)
+    task.defer(function()
+        hideObject(obj)
+    end)
+end)
+
+print("Blox Fruits Map Optimizer: ON")
