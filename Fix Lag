@@ -1,4 +1,4 @@
--- [[ MrDon - Optimized Client Utilities (Fixed Invisible Water Floor) ]]
+-- [[ MrDon - Ultimate Client Optimizer (Global Water Walk - AutoFarm Friendly) ]]
 local Plr      = game:GetService("Players")
 local WS       = game:GetService("Workspace")
 local Lgt      = game:GetService("Lighting")
@@ -337,90 +337,43 @@ end
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── INVISIBLE WATER WALK FLOOR (SÀN TÀNG HÌNH ĐỨNG TẠI CHỖ) ──────
-local SEA_LEVEL  = 0
-local FLOOR_SIZE = Vector3.new(100, 2, 100)
-local currentFloor = nil
-local floorConn = nil
+-- ── INVISIBLE GLOBAL WATER FLOOR (FIX MOON JUMP & AUTO-FARM) ──
+local function setupGlobalWaterFloor()
+    local floorName = "__GlobalWaterFloor"
+    if WS:FindFirstChild(floorName) then return end
 
-local function removeFloor()
-    if floorConn then
-        floorConn:Disconnect()
-        floorConn = nil
-    end
-    if currentFloor and currentFloor.Parent then
-        safeKill(currentFloor)
-    end
-    currentFloor = nil
-end
-
-local function spawnFloor(char)
-    removeFloor()
-
-    local root = char:WaitForChild("HumanoidRootPart", 5)
-    local hum  = char:WaitForChild("Humanoid", 5)
-    if not root or not hum then return end
-
-    -- Tắt trạng thái bơi và leo trèo
-    pcall(function()
-        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, false)
-    end)
-
-    -- Tạo sàn tàng hình 100%
+    -- Tạo một sàn duy nhất cực khổng lồ bao phủ toàn bộ vùng biển
     local floor = Instance.new("Part")
-    floor.Name            = "__WaterFloor"
-    floor.Size            = FLOOR_SIZE
-    floor.Transparency    = 1 -- Trong suốt hoàn toàn
-    floor.CanCollide      = true
-    floor.Anchored        = true
-    floor.CastShadow      = false
-    floor.CanTouch        = false
-    floor.CanQuery        = false
-    floor.Material        = Enum.Material.SmoothPlastic
+    floor.Name = floorName
+    floor.Size = Vector3.new(500000, 5, 500000)
+    floor.Position = Vector3.new(0, -2.5, 0) -- Mặt trên sẽ nằm chính xác ở Y = 0
+    floor.Transparency = 1
+    floor.Anchored = true
+    floor.CanCollide = true
+    floor.CastShadow = false
     
-    -- Đặt mặt trên sàn phẳng chuẩn mực nước Y = 0
-    local floorY = SEA_LEVEL - (FLOOR_SIZE.Y / 2)
-    floor.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z)
+    -- QUAN TRỌNG CHO AUTO-FARM: Tắt touch và query để raycast/tween của bot đi xuyên qua không bị kẹt
+    floor.CanTouch = false
+    floor.CanQuery = false
+    floor.Massless = true
+    floor.Material = Enum.Material.SmoothPlastic
     floor.Parent = WS
 
-    currentFloor = floor
-
-    -- Cập nhật di chuyển sàn thông minh
-    floorConn = Run.Heartbeat:Connect(function()
-        if not (floor and floor.Parent and root and root.Parent and hum and hum.Health > 0) then
-            removeFloor()
-            return
+    -- Tắt trạng thái bơi lội để auto-farm bay ngang vùng nước cũ không bị khựng
+    local function fixHumanoid(char)
+        local hum = char:WaitForChild("Humanoid", 5)
+        if hum then
+            pcall(function()
+                hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+            end)
         end
-        
-        -- Ép trạng thái về Running nếu game tự chuyển Swimming
-        if hum:GetState() == Enum.HumanoidStateType.Swimming then
-            hum:ChangeState(Enum.HumanoidStateType.Running)
-        end
+    end
 
-        -- Tính khoảng cách phẳng (X, Z) giữa nhân vật và tâm sàn hiện tại
-        local charPos2D  = Vector2.new(root.Position.X, root.Position.Z)
-        local floorPos2D = Vector2.new(floor.Position.X, floor.Position.Z)
-
-        -- Chỉ di chuyển sàn khi nhân vật đi ra cách tâm quá 25 studs (chưa đến mép sàn 100x100)
-        if (charPos2D - floorPos2D).Magnitude > 25 then
-            floor.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z)
-        end
-    end)
-
-    hum.Died:Connect(removeFloor)
-    char.AncestryChanged:Connect(function()
-        if not char.Parent then removeFloor() end
-    end)
+    if LP.Character then task.spawn(fixHumanoid, LP.Character) end
+    LP.CharacterAdded:Connect(fixHumanoid)
 end
 
-local function onLocalChar(char)
-    task.wait(0.2)
-    spawnFloor(char)
-end
-
-if LP.Character then task.spawn(onLocalChar, LP.Character) end
-LP.CharacterAdded:Connect(onLocalChar)
+setupGlobalWaterFloor()
 
 -- ── CAMERA ANTI-SHAKE ─────────────────────────────────────────
 do
@@ -621,4 +574,4 @@ end)
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[MrDon] Client script loaded successfully.")
+print("[MrDon] Client script loaded successfully. (Global Water Floor V3)")
