@@ -77,6 +77,7 @@ local WATER_WORDS = {"water", "ocean", "sea", "wave", "lakewater", "waterzone"}
 local OVL_WORDS = {"v4vignette", "racevignette", "screenvignette", "darkscreenvignette", "blackscreenoverlay", "fogoverlay", "mistoverlay", "terrosharkscreen", "seabeastscreen", "cinematicoverlay", "cutsceneoverlay"}
 local DMG_WORDS = {"damageindicator", "floatingdamagetext", "combatdamagetext", "hitdamagepopup"}
 local MOB_FX_WORDS = {"skill", "attack", "hit", "fx", "effect", "blast", "slash", "explosion", "magic", "spell"}
+local MAP_DECO_WORDS = {"tree", "leaf", "leaves", "grass", "bush", "flower", "rock", "stone", "cloud", "foliage", "wood"}
 
 local function norm(s) return s:lower():gsub("[^%w]", "") end
 local function hasWord(s, words)
@@ -171,15 +172,30 @@ task.spawn(function()
     LP.CharacterAdded:Connect(setupCharacter)
 end)
 
-WS.DescendantAdded:Connect(function(o)
-    task.defer(function()
-        if o and o.Parent and o:IsA("BasePart") and hasWord(o.Name, WATER_WORDS) and not isProtected(o) then
-            safeKill(o)
-        end
-    end)
-end)
+local function cleanMapObject(o)
+    if not o or not o.Parent or isProtected(o.Parent) then return end
 
-local function cleanEffects(obj)
+    if o:IsA("Decal") or o:IsA("Texture") then
+        safeKill(o)
+    elseif o:IsA("BasePart") then
+        if hasWord(o.Name, WATER_WORDS) and not isProtected(o) then
+            safeKill(o)
+            return
+        end
+        if hasWord(o.Name, MAP_DECO_WORDS) and not o.CanCollide then
+            safeKill(o)
+            return
+        end
+        safeSet(o, "Material", Enum.Material.SmoothPlastic)
+        safeSet(o, "Reflectance", 0)
+        safeSet(o, "CastShadow", false)
+        if o:IsA("MeshPart") then
+            safeSet(o, "TextureID", "")
+        end
+    end
+end
+
+local function cleanEffectsAndMap(obj)
     if not obj or not obj.Parent then return end
     for _, child in ipairs(obj:GetDescendants()) do
         if VFX_CLASSES[child.ClassName] then
@@ -190,12 +206,14 @@ local function cleanEffects(obj)
             else
                 safeKill(child)
             end
+        else
+            cleanMapObject(child)
         end
     end
 end
 
 task.spawn(function()
-    cleanEffects(WS)
+    cleanEffectsAndMap(WS)
     WS.DescendantAdded:Connect(function(o)
         task.defer(function()
             if not o or not o.Parent then return end
@@ -207,6 +225,8 @@ task.spawn(function()
                         safeKill(o)
                     end
                 end
+            else
+                cleanMapObject(o)
             end
         end)
     end)
