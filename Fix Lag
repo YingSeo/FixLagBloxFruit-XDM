@@ -1,4 +1,4 @@
--- [[ MrDon - Optimized Client Utilities ]]
+-- [[ MrDon - Client Utilities (Water Walk Fix) ]]
 local Plr      = game:GetService("Players")
 local WS       = game:GetService("Workspace")
 local Lgt      = game:GetService("Lighting")
@@ -11,7 +11,6 @@ repeat task.wait() until game:IsLoaded()
 local LP    = Plr.LocalPlayer
 local BLACK = Color3.fromRGB(0,0,0)
 
--- Safe UI parenting selector (CoreGui fallback to PlayerGui)
 local function getGuiParent()
     local ok, res = pcall(function() return CoreGui end)
     if ok and res then return res end
@@ -360,7 +359,7 @@ end
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── WATER WALK PLATFORM (STABILIZED) ─────────────────────────
+-- ── WATER WALK PLATFORM (SỬA LỖI LÚN NƯỚC) ────────────────────
 local SEA_LEVEL = 0
 local currentFloor = nil
 local floorConn = nil
@@ -383,9 +382,14 @@ local function spawnFloor(char)
     local hum  = char:WaitForChild("Humanoid", 5)
     if not root or not hum then return end
 
+    -- Vô hiệu hóa Swimming state để tránh Roblox tự kích hoạt vật lý bơi làm chìm nhân vật
+    pcall(function()
+        hum:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+    end)
+
     local floor = Instance.new("Part")
     floor.Name            = "__WaterFloor"
-    floor.Size            = Vector3.new(300, 2, 300)
+    floor.Size            = Vector3.new(400, 3, 400)
     floor.Transparency    = 1
     floor.CanCollide      = true
     floor.Anchored        = true
@@ -394,18 +398,37 @@ local function spawnFloor(char)
     floor.CanQuery        = false
     floor.Massless        = true
     floor.Material        = Enum.Material.SmoothPlastic
-    floor.CFrame          = CFrame.new(root.Position.X, SEA_LEVEL - 1, root.Position.Z)
+    
+    -- Đặt vị trí mặt trên của sàn nằm cao hơn mặt nước 0.5 stud
+    local targetFloorY = SEA_LEVEL - 1.0
+    floor.CFrame          = CFrame.new(root.Position.X, targetFloorY, root.Position.Z)
     floor.Parent          = WS
 
     currentFloor = floor
 
-    -- RunService.Stepped executes before physics solver: prevents falling through water gaps during fast movement
+    -- Cập nhật trước bước mô phỏng vật lý
     floorConn = Run.Stepped:Connect(function()
         if not (floor and floor.Parent and root and root.Parent) then
             removeFloor()
             return
         end
-        floor.CFrame = CFrame.new(root.Position.X, SEA_LEVEL - 1, root.Position.Z)
+        
+        -- Khóa Humanoid luôn ở trạng thái Running/Freefall khi đi trên sàn
+        local state = hum:GetState()
+        if state == Enum.HumanoidStateType.Swimming then
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+        end
+
+        -- Tính toán vị trí chân theo Y của nhân vật để nâng sàn khi ngang mặt nước
+        local rootY = root.Position.Y
+        local floorY = targetFloorY
+        
+        -- Nếu nhân vật đáp xuống gần mực nước, nâng sàn nâng đỡ ngay tại chân
+        if rootY - 3.2 < SEA_LEVEL then
+            floorY = rootY - 3.2
+        end
+
+        floor.CFrame = CFrame.new(root.Position.X, floorY, root.Position.Z)
     end)
 
     hum.Died:Connect(removeFloor)
@@ -491,7 +514,6 @@ task.spawn(function()
     lbl.Text                   = "YingSeo FPS: --"
     lbl.Parent                 = frame
 
-    -- Mouse / Touch Dragging Logic
     local dragging = false
     local dragStart, startPos
 
@@ -518,7 +540,6 @@ task.spawn(function()
         end
     end)
 
-    -- FPS Counter Loop
     local frameCount = 0
     local accTime = 0
     local HI  = Color3.fromRGB(0, 220, 120)
