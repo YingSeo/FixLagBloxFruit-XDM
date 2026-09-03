@@ -1,390 +1,266 @@
-local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
-
-local player = Players.LocalPlayer
+local Players     = game:GetService("Players")
+local Workspace   = game:GetService("Workspace")
+local Lighting    = game:GetService("Lighting")
+local RunService  = game:GetService("RunService")
 
 repeat task.wait() until game:IsLoaded()
 
-local runtime = Workspace:FindFirstChild("MrDonRuntime")
+local LP = Players.LocalPlayer
 
-if runtime then
-    runtime:Destroy()
+local SPECIAL_MAPS = {
+    frozendimension   = true,
+    prehistoricisland = true,
+    kitsuneisland     = true,
+}
+
+local KEEP_CONTAINERS = {
+    enemies    = true, enemy      = true,
+    characters = true, character  = true,
+    npcs       = true, npc        = true,
+    boats      = true, boat       = true,
+    ships      = true, ship       = true,
+}
+
+local VFX_CLASSES = {
+    ParticleEmitter  = true, Beam            = true,
+    Trail            = true, Fire            = true,
+    Smoke            = true, Sparkles        = true,
+    SelectionBox     = true, SelectionSphere = true,
+}
+
+local LIGHTING_FX = {
+    ColorCorrectionEffect = true, BloomEffect       = true,
+    BlurEffect            = true, SunRaysEffect      = true,
+    DepthOfFieldEffect    = true, Sky                = true,
+    Atmosphere            = true,
+}
+
+local HAKI_PATTERNS = {
+    "aura", "haki", "kenbun", "observe", "kenbunshoku",
+    "v2effect", "v3effect", "v4effect",
+}
+
+local function norm(s)
+    return s:lower():gsub("[^%w]", "")
 end
 
-runtime = Instance.new("Folder")
-runtime.Name = "MrDonRuntime"
-runtime.Parent = Workspace
-
-local hidden = {}
-local protectedCache = {}
-
-local function lower(name)
-    return string.lower(name or "")
-end
-
-local function hasBoatName(name)
-    name = lower(name)
-
-    return name:find("boat", 1, true)
-        or name:find("ship", 1, true)
-        or name:find("raft", 1, true)
-        or name:find("dinghy", 1, true)
-        or name:find("sailboat", 1, true)
-end
-
-local function isCharacterModel(obj)
-    return obj
-        and obj:IsA("Model")
-        and obj:FindFirstChildOfClass("Humanoid") ~= nil
-end
-
-local function isBoatModel(obj)
-    if not obj or not obj:IsA("Model") then
-        return false
+local function isSpecial(name)
+    local n = norm(name)
+    if SPECIAL_MAPS[n] then return true end
+    for k in next, SPECIAL_MAPS do
+        if n:find(k, 1, true) then return true end
     end
-
-    if obj:FindFirstChildWhichIsA("VehicleSeat", true) then
-        return true
-    end
-
-    if hasBoatName(obj.Name) then
-        return true
-    end
-
     return false
 end
 
-local function isProtectedModel(obj)
-    if not obj or not obj:IsA("Model") then
-        return false
-    end
-
-    if player.Character and obj == player.Character then
-        return true
-    end
-
-    if isCharacterModel(obj) then
-        return true
-    end
-
-    if isBoatModel(obj) then
-        return true
-    end
-
-    local name = lower(obj.Name)
-
-    return name == "npc"
-        or name == "npcs"
-        or name == "enemy"
-        or name == "enemies"
-        or name == "characters"
-        or name == "boats"
-        or name == "ships"
-end
-
-local function showObject(obj)
-    if not obj or not obj.Parent then
-        return
-    end
-
-    if obj:IsA("BasePart") then
-        obj.LocalTransparencyModifier = 0
-        obj.CastShadow = true
-
-    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-        obj.Transparency = 0
-
-    elseif obj:IsA("ParticleEmitter")
-        or obj:IsA("Trail")
-        or obj:IsA("Beam")
-        or obj:IsA("Smoke")
-        or obj:IsA("Fire")
-        or obj:IsA("Sparkles") then
-        obj.Enabled = true
-
-    elseif obj:IsA("PointLight")
-        or obj:IsA("SpotLight")
-        or obj:IsA("SurfaceLight") then
-        obj.Enabled = true
-
-    elseif obj:IsA("Highlight") then
-        obj.Enabled = true
-    end
-end
-
-local function showCharacter(character)
-    if not character then
-        return
-    end
-
-    protectedCache[character] = true
-
-    showObject(character)
-
-    for _, obj in ipairs(character:GetDescendants()) do
-        showObject(obj)
-        protectedCache[obj] = true
-    end
-end
-
-local function protectModel(model)
-    if not model then
-        return
-    end
-
-    protectedCache[model] = true
-
-    for _, obj in ipairs(model:GetDescendants()) do
-        protectedCache[obj] = true
-    end
+local function isBoat(obj)
+    if not obj:IsA("Model") then return false end
+    local n = norm(obj.Name)
+    if n:find("boat",1,true) or n:find("ship",1,true)
+    or n:find("raft",1,true) or n:find("dinghy",1,true) then return true end
+    return obj:FindFirstChildWhichIsA("VehicleSeat", true) ~= nil
 end
 
 local function isProtected(obj)
-    if not obj then
-        return true
-    end
-
-    if obj == runtime then
-        return true
-    end
-
-    if protectedCache[obj] then
-        return true
-    end
-
-    local character = player.Character
-
-    if character and (obj == character or obj:IsDescendantOf(character)) then
-        protectedCache[obj] = true
-        return true
-    end
-
-    local current = obj
-
-    while current and current ~= Workspace do
-        if current:IsA("Model") then
-            if isCharacterModel(current) or isBoatModel(current) then
-                protectModel(current)
-                return true
-            end
-        end
-
-        current = current.Parent
-    end
-
+    if not obj:IsA("Model") then return false end
+    if obj:FindFirstChildOfClass("Humanoid") then return true end
+    if isBoat(obj) then return true end
+    if isSpecial(obj.Name) then return true end
     return false
 end
 
-local function hideObject(obj)
-    if not obj or not obj.Parent or hidden[obj] then
-        return
-    end
-
-    if isProtected(obj) then
-        showObject(obj)
-        return
-    end
-
-    hidden[obj] = true
-
-    if obj:IsA("BasePart") then
-        obj.LocalTransparencyModifier = 1
-        obj.CastShadow = false
-
-    elseif obj:IsA("Decal") or obj:IsA("Texture") then
-        obj.Transparency = 1
-
-    elseif obj:IsA("ParticleEmitter")
-        or obj:IsA("Trail")
-        or obj:IsA("Beam")
-        or obj:IsA("Smoke")
-        or obj:IsA("Fire")
-        or obj:IsA("Sparkles") then
-        obj.Enabled = false
-
-    elseif obj:IsA("PointLight")
-        or obj:IsA("SpotLight")
-        or obj:IsA("SurfaceLight") then
-        obj.Enabled = false
-
-    elseif obj:IsA("Highlight") then
-        obj.Enabled = false
-    end
+local function keepTree(obj)
+    if obj:IsA("Model") then return isProtected(obj) end
+    return KEEP_CONTAINERS[norm(obj.Name)] == true
 end
 
-local character = player.Character
-
-if character then
-    showCharacter(character)
+local function hasProtected(obj)
+    if keepTree(obj) then return true end
+    for _, c in ipairs(obj:GetChildren()) do
+        if keepTree(c) or hasProtected(c) then return true end
+    end
+    return false
 end
 
-player.CharacterAdded:Connect(function(newCharacter)
-    character = newCharacter
+local function inProtectedTree(obj)
+    local p = obj.Parent
+    while p and p ~= Workspace and p ~= game do
+        if keepTree(p) then return true end
+        p = p.Parent
+    end
+    return false
+end
 
-    task.defer(function()
-        showCharacter(newCharacter)
-    end)
-
-    newCharacter.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            showObject(obj)
-            protectedCache[obj] = true
-        end)
-    end)
-end)
-
-local queue = {}
-local index = 1
-
-for _, obj in ipairs(Workspace:GetDescendants()) do
-    if obj ~= runtime and not obj:IsDescendantOf(runtime) then
-        queue[#queue + 1] = obj
+local function cleanFolder(parent)
+    local list = parent:GetChildren()
+    for i = 1, #list do
+        local obj = list[i]
+        if obj and obj.Parent then
+            if keepTree(obj) then
+            elseif hasProtected(obj) then
+                cleanFolder(obj)
+            else
+                pcall(function() obj:Destroy() end)
+            end
+        end
+        if i % 50 == 0 then task.wait() end
     end
 end
 
 task.spawn(function()
-    local batchSize = 700
+    local roots = {"Map","SeaMap","Environment","World","Map2","Map3","Islands"}
+    for _, name in ipairs(roots) do
+        local c = Workspace:FindFirstChild(name)
+        if c then task.spawn(cleanFolder, c) end
+    end
+end)
 
-    while index <= #queue do
-        local finish = math.min(index + batchSize - 1, #queue)
+do
+    local terrain = Workspace:FindFirstChildOfClass("Terrain")
+    if terrain then
+        local cl = terrain:FindFirstChildOfClass("Clouds")
+        if cl then pcall(function() cl:Destroy() end) end
+        pcall(function() terrain.Decoration = false end)
+        pcall(function() terrain.WaterWaveSize = 0 end)
+        pcall(function() terrain.WaterWaveSpeed = 0 end)
+        pcall(function() terrain.WaterReflectance = 0 end)
+        pcall(function() terrain.WaterTransparency = 1 end)
+    end
 
-        for i = index, finish do
-            local obj = queue[i]
+    for cls in next, LIGHTING_FX do
+        local o = Lighting:FindFirstChildOfClass(cls)
+        if o then pcall(function() o:Destroy() end) end
+    end
 
-            if obj and obj.Parent and not obj:IsDescendantOf(runtime) then
-                if isProtected(obj) then
-                    showObject(obj)
-                else
-                    hideObject(obj)
-                end
+    Lighting.GlobalShadows = false
+    Lighting.FogEnd        = 100000
+    Lighting.FogStart      = 99999
+    Lighting.Brightness    = 2
+    Lighting.ClockTime     = 14
+    Lighting.Ambient       = Color3.fromRGB(178, 178, 178)
+    Lighting.OutdoorAmbient= Color3.fromRGB(178, 178, 178)
+end
+
+local function purgeFX(parent)
+    if not parent then return end
+    for _, obj in ipairs(parent:GetChildren()) do
+        if LIGHTING_FX[obj.ClassName] or VFX_CLASSES[obj.ClassName] then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+end
+
+purgeFX(Workspace.CurrentCamera)
+purgeFX(Lighting)
+
+Lighting.ChildAdded:Connect(function(obj)
+    if LIGHTING_FX[obj.ClassName] then
+        task.defer(function()
+            if obj and obj.Parent then
+                pcall(function() obj:Destroy() end)
+            end
+        end)
+    end
+end)
+
+task.spawn(function()
+    local desc = Workspace:GetDescendants()
+    for i = 1, #desc do
+        local obj = desc[i]
+        if obj and obj.Parent and VFX_CLASSES[obj.ClassName] then
+            if not inProtectedTree(obj) then
+                pcall(function() obj:Destroy() end)
             end
         end
-
-        index = finish + 1
-
-        if index <= #queue then
-            RunService.Heartbeat:Wait()
-        end
+        if i % 80 == 0 then task.wait() end
     end
 end)
 
 Workspace.DescendantAdded:Connect(function(obj)
-    if not obj or not obj.Parent then
-        return
-    end
-
-    if obj:IsDescendantOf(runtime) then
-        return
-    end
-
     task.defer(function()
-        if not obj.Parent then
-            return
-        end
-
-        if isProtected(obj) then
-            showObject(obj)
-
-            if obj:IsA("Model") then
-                for _, child in ipairs(obj:GetDescendants()) do
-                    showObject(child)
-                    protectedCache[child] = true
-                end
-            end
-        else
-            hideObject(obj)
+        if not (obj and obj.Parent) then return end
+        if VFX_CLASSES[obj.ClassName] and not inProtectedTree(obj) then
+            pcall(function() obj:Destroy() end)
         end
     end)
 end)
 
-local floor = Instance.new("Part")
-floor.Name = "InvisibleWaterFloor"
-floor.Size = Vector3.new(8192, 2, 8192)
-floor.Anchored = true
-floor.CanCollide = true
-floor.CanTouch = false
-floor.CanQuery = true
-floor.Transparency = 1
-floor.CastShadow = false
-floor.Parent = runtime
-
-local function updateFloor()
-    local currentCharacter = player.Character
-
-    if not currentCharacter then
-        return
+local function isHakiObj(obj)
+    if obj:IsA("Highlight") or obj:IsA("BillboardGui") then
+        return not inProtectedTree(obj) and true
     end
-
-    local root = currentCharacter:FindFirstChild("HumanoidRootPart")
-
-    if not root then
-        return
+    local n = norm(obj.Name)
+    for _, p in ipairs(HAKI_PATTERNS) do
+        if n:find(p, 1, true) then return true end
     end
-
-    floor.CFrame = CFrame.new(
-        root.Position.X,
-        root.Position.Y - 3.5,
-        root.Position.Z
-    )
+    return false
 end
 
-RunService.Heartbeat:Connect(updateFloor)
-
-local playerGui = player:WaitForChild("PlayerGui")
-
-local oldGui = playerGui:FindFirstChild("MrDonFPS")
-
-if oldGui then
-    oldGui:Destroy()
+local function stripHaki(char)
+    if not char then return end
+    for _, obj in ipairs(char:GetDescendants()) do
+        if isHakiObj(obj) then pcall(function() obj:Destroy() end) end
+    end
+    char.DescendantAdded:Connect(function(obj)
+        task.defer(function()
+            if obj and obj.Parent and isHakiObj(obj) then
+                pcall(function() obj:Destroy() end)
+            end
+        end)
+    end)
 end
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "MrDonFPS"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder = 2147483647
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Parent = playerGui
+local function hideChar(char)
+    if not char then return end
+    task.spawn(function()
+        task.wait(0.1)
+        for _, obj in ipairs(char:GetDescendants()) do
+            if obj:IsA("BasePart") or obj:IsA("MeshPart") or obj:IsA("UnionOperation") then
+                pcall(function()
+                    obj.Transparency = 1
+                    obj.CastShadow   = false
+                end)
+            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                pcall(function() obj.Transparency = 1 end)
+            elseif obj:IsA("BillboardGui") or obj:IsA("SurfaceGui") then
+                pcall(function() obj.Enabled = false end)
+            elseif VFX_CLASSES[obj.ClassName] then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+    end)
+end
 
-local box = Instance.new("Frame")
-box.Size = UDim2.fromOffset(90, 32)
-box.Position = UDim2.fromOffset(8, 8)
-box.BackgroundTransparency = 0.25
-box.BorderSizePixel = 0
-box.Rotation = 0
-box.ZIndex = 999999
-box.Parent = gui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 6)
-corner.Parent = box
-
-local label = Instance.new("TextLabel")
-label.Size = UDim2.fromScale(1, 1)
-label.BackgroundTransparency = 1
-label.Text = "FPS: --"
-label.TextSize = 17
-label.Font = Enum.Font.GothamBold
-label.TextColor3 = Color3.new(1, 1, 1)
-label.TextXAlignment = Enum.TextXAlignment.Center
-label.TextYAlignment = Enum.TextYAlignment.Center
-label.Rotation = 0
-label.ZIndex = 1000000
-label.Parent = box
-
-local frames = 0
-local elapsed = 0
-
-RunService.RenderStepped:Connect(function(dt)
-    frames += 1
-    elapsed += dt
-
-    if elapsed >= 0.5 then
-        label.Text = "FPS: " .. tostring(math.floor(frames / elapsed + 0.5))
-        frames = 0
-        elapsed = 0
+local function hookPlayer(plr)
+    if plr == LP then return end
+    local function onChar(char)
+        task.wait(0.2)
+        stripHaki(char)
+        hideChar(char)
     end
-end)
+    if plr.Character then task.spawn(onChar, plr.Character) end
+    plr.CharacterAdded:Connect(onChar)
+end
 
-print("MrDon Optimizer ON")
+for _, plr in ipairs(Players:GetPlayers()) do hookPlayer(plr) end
+Players.PlayerAdded:Connect(hookPlayer)
+
+do
+    local prevLook = Vector3.new(0, 0, -1)
+    RunService.RenderStepped:Connect(function()
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        local look = cam.CFrame.LookVector
+        if look ~= prevLook then
+            prevLook = look
+            local pos = cam.CFrame.Position
+            cam.CFrame = CFrame.new(pos, pos + look)
+        end
+        purgeFX(cam)
+    end)
+end
+
+pcall(function() setfpscap(480) end)
+pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+
+print("[MrDon] Script loaded — Delta X / Blox Fruits")
