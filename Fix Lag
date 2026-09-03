@@ -1,14 +1,24 @@
-local Plr  = game:GetService("Players")
-local WS   = game:GetService("Workspace")
-local Lgt  = game:GetService("Lighting")
-local Run  = game:GetService("RunService")
-local UIS  = game:GetService("UserInputService")
+-- [[ MrDon - Optimized Client Utilities ]]
+local Plr      = game:GetService("Players")
+local WS       = game:GetService("Workspace")
+local Lgt      = game:GetService("Lighting")
+local Run      = game:GetService("RunService")
+local UIS      = game:GetService("UserInputService")
+local CoreGui  = game:GetService("CoreGui")
 
 repeat task.wait() until game:IsLoaded()
 
 local LP    = Plr.LocalPlayer
 local BLACK = Color3.fromRGB(0,0,0)
-local pGui  = LP:WaitForChild("PlayerGui", 10)
+
+-- Safe UI parenting selector (CoreGui fallback to PlayerGui)
+local function getGuiParent()
+    local ok, res = pcall(function() return CoreGui end)
+    if ok and res then return res end
+    return LP:WaitForChild("PlayerGui", 10)
+end
+
+local targetParent = getGuiParent()
 
 local VFX = {
     ParticleEmitter=1, Beam=1, Trail=1,
@@ -74,10 +84,10 @@ local function inProtected(o)
     return false
 end
 
-local function safeKill(o) pcall(o.Destroy, o) end
+local function safeKill(o) pcall(function() o:Destroy() end) end
 local function safeSet(o,k,v) pcall(function() o[k]=v end) end
 
--- ── LIGHTING ─────────────────────────────────────────────────
+-- ── LIGHTING OPTIMIZATION ─────────────────────────────────────
 for cls in next,LFX do
     local o = Lgt:FindFirstChildOfClass(cls)
     if o then safeKill(o) end
@@ -92,7 +102,6 @@ Lgt.OutdoorAmbient = Color3.fromRGB(178,178,178)
 
 Lgt.ChildAdded:Connect(function(o)
     if LFX[o.ClassName] then
-        -- task.delay(0) runs next Heartbeat, before next render — faster than defer
         task.delay(0, function() if o.Parent then safeKill(o) end end)
     end
 end)
@@ -127,13 +136,12 @@ task.spawn(function()
 end)
 
 WS.DescendantAdded:Connect(function(o)
-    -- delay(0) = next Heartbeat step, kills before it ever renders
     task.delay(0, function()
         if o and o.Parent and isWaterPart(o) then safeKill(o) end
     end)
 end)
 
--- ── VFX PURGE (world + camera) ────────────────────────────────
+-- ── VFX PURGE ────────────────────────────────────────────────
 local function purgeCamera()
     local cam = WS.CurrentCamera
     if not cam then return end
@@ -151,8 +159,6 @@ task.spawn(function()
     end
 end)
 
--- KEY FIX: task.delay(0) instead of task.defer — fires before the VFX
--- gets its first Render/Heartbeat tick, so it never visually appears
 WS.DescendantAdded:Connect(function(o)
     task.delay(0, function()
         if o and o.Parent and VFX[o.ClassName] and not inProtected(o) then
@@ -217,7 +223,7 @@ WS.DescendantAdded:Connect(function(o)
     task.delay(0, function() if o and o.Parent and isBoat(o) then paintBoat(o) end end)
 end)
 
--- ── OVERLAY / BORDER STRIP ───────────────────────────────────
+-- ── OVERLAY STRIP ────────────────────────────────────────────
 local OVL_W = {
     "v4","race","border","vignette","edge","rim","glow","aura",
     "overlay","screenfx","effect","terroshark","terror","shark",
@@ -256,9 +262,9 @@ local function stripOverlay(gui)
     end
 end
 
-if pGui then
-    stripOverlay(pGui)
-    pGui.DescendantAdded:Connect(function(o)
+if targetParent then
+    stripOverlay(targetParent)
+    targetParent.DescendantAdded:Connect(function(o)
         task.delay(0, function()
             if o and o.Parent and isOverlay(o) then
                 safeSet(o,"Visible",false)
@@ -268,7 +274,7 @@ if pGui then
         end)
     end)
     task.spawn(function()
-        while true do task.wait(2) stripOverlay(pGui) end
+        while true do task.wait(2) stripOverlay(targetParent) end
     end)
 end
 
@@ -290,9 +296,9 @@ local function killDmgGui(o)
     end
 end
 
-if pGui then
-    for _,o in ipairs(pGui:GetDescendants()) do killDmgGui(o) end
-    pGui.DescendantAdded:Connect(function(o)
+if targetParent then
+    for _,o in ipairs(targetParent:GetDescendants()) do killDmgGui(o) end
+    targetParent.DescendantAdded:Connect(function(o)
         task.delay(0, function() if o and o.Parent then killDmgGui(o) end end)
     end)
 end
@@ -354,26 +360,16 @@ end
 for _,p in ipairs(Plr:GetPlayers()) do hookPlayer(p) end
 Plr.PlayerAdded:Connect(hookPlayer)
 
--- ── INVISIBLE FLOOR (thay water walk) ────────────────────────
--- Tạo 1 Part tàng hình gắn vào character khi spawn.
--- Part nằm ngay dưới chân, chỉ collide với terrain/sea.
--- Không poll state, không tranh chấp script farm.
--- Tự xoá khi character chết / respawn.
-
-local FLOOR_Y_OFFSET = -3.0   -- khoảng cách từ HumanoidRootPart xuống sàn
-local SEA_LEVEL      = 0      -- Y mặt biển mặc định Blox Fruits
-
-local function learnSeaLevel()
-    local rp = RaycastParams.new()
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    local r = WS:Raycast(Vector3.new(0,500,0), Vector3.new(0,-1000,0), rp)
-    if r then SEA_LEVEL = r.Position.Y end
-end
-task.spawn(learnSeaLevel)
-
+-- ── WATER WALK PLATFORM (STABILIZED) ─────────────────────────
+local SEA_LEVEL = 0
 local currentFloor = nil
+local floorConn = nil
 
 local function removeFloor()
+    if floorConn then
+        floorConn:Disconnect()
+        floorConn = nil
+    end
     if currentFloor and currentFloor.Parent then
         safeKill(currentFloor)
     end
@@ -383,69 +379,43 @@ end
 local function spawnFloor(char)
     removeFloor()
 
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local hum  = char:FindFirstChildOfClass("Humanoid")
+    local root = char:WaitForChild("HumanoidRootPart", 5)
+    local hum  = char:WaitForChild("Humanoid", 5)
     if not root or not hum then return end
 
-    -- Sàn tàng hình: rộng 120 studs, đủ che toàn bộ vùng bơi
     local floor = Instance.new("Part")
-    floor.Name             = "__WaterFloor"
-    floor.Size             = Vector3.new(120, 1, 120)
-    floor.Transparency     = 1
-    floor.CanCollide       = true
-    floor.Anchored         = true
-    floor.CastShadow       = false
-    floor.CanTouch         = false
-    floor.CanQuery         = false
-    floor.Massless         = true
-    floor.Material         = Enum.Material.SmoothPlastic
-    floor.CollisionGroup   = "Default"
-
-    -- Đặt ngay tại sea level
-    floor.CFrame = CFrame.new(root.Position.X, SEA_LEVEL + FLOOR_Y_OFFSET, root.Position.Z)
-    floor.Parent = WS
+    floor.Name            = "__WaterFloor"
+    floor.Size            = Vector3.new(300, 2, 300)
+    floor.Transparency    = 1
+    floor.CanCollide      = true
+    floor.Anchored        = true
+    floor.CastShadow      = false
+    floor.CanTouch        = false
+    floor.CanQuery        = false
+    floor.Massless        = true
+    floor.Material        = Enum.Material.SmoothPlastic
+    floor.CFrame          = CFrame.new(root.Position.X, SEA_LEVEL - 1, root.Position.Z)
+    floor.Parent          = WS
 
     currentFloor = floor
 
-    -- Theo nhân vật di chuyển — chỉ cập nhật X/Z, Y cố định tại sea level
-    -- Dùng Heartbeat để không ảnh hưởng render, cập nhật mỗi 0.1s tránh overhead
-    local lastMove = 0
-    local conn
-    conn = Run.Heartbeat:Connect(function()
+    -- RunService.Stepped executes before physics solver: prevents falling through water gaps during fast movement
+    floorConn = Run.Stepped:Connect(function()
         if not (floor and floor.Parent and root and root.Parent) then
-            conn:Disconnect(); return
-        end
-        local now = tick()
-        if now - lastMove < 0.1 then return end
-        lastMove = now
-        floor.CFrame = CFrame.new(
-            root.Position.X,
-            SEA_LEVEL + FLOOR_Y_OFFSET,
-            root.Position.Z
-        )
-    end)
-
-    -- Dọn dẹp khi chết
-    hum.Died:Connect(function()
-        conn:Disconnect()
-        removeFloor()
-    end)
-
-    -- Dọn dẹp khi character bị remove
-    char.AncestryChanged:Connect(function()
-        if not char.Parent then
-            conn:Disconnect()
             removeFloor()
+            return
         end
+        floor.CFrame = CFrame.new(root.Position.X, SEA_LEVEL - 1, root.Position.Z)
+    end)
+
+    hum.Died:Connect(removeFloor)
+    char.AncestryChanged:Connect(function()
+        if not char.Parent then removeFloor() end
     end)
 end
 
--- Hook vào character của local player
 local function onLocalChar(char)
-    -- Đợi character load xong hoàn toàn
-    char:WaitForChild("HumanoidRootPart", 10)
-    char:WaitForChild("Humanoid", 10)
-    task.wait(0.3)
+    task.wait(0.2)
     spawnFloor(char)
 end
 
@@ -468,89 +438,108 @@ do
     end)
 end
 
--- ── FPS DISPLAY ──────────────────────────────────────────────
+-- ── FPS DISPLAY BAR ──────────────────────────────────────────
 task.spawn(function()
-    if not pGui then return end
+    if not targetParent then return end
 
-    local old = pGui:FindFirstChild("__MrDonFPS")
-    if old then old:Destroy() end
+    local old = targetParent:FindFirstChild("__MrDonFPS")
+    if old then safeKill(old) end
 
     local sg = Instance.new("ScreenGui")
     sg.Name            = "__MrDonFPS"
     sg.ResetOnSpawn    = false
     sg.DisplayOrder    = 999
     sg.IgnoreGuiInset  = true
-    sg.Parent          = pGui
+
+    local pcallOk = pcall(function() sg.Parent = targetParent end)
+    if not pcallOk then
+        sg.Parent = LP:WaitForChild("PlayerGui", 10)
+    end
 
     local frame = Instance.new("Frame")
-    frame.Size               = UDim2.new(0, 140, 0, 34)
-    frame.Position           = UDim2.new(1, -148, 0, 8)
-    frame.BackgroundColor3   = Color3.fromRGB(8, 8, 12)
-    frame.BackgroundTransparency = 0.25
-    frame.BorderSizePixel    = 0
-    frame.Parent             = sg
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 17)
+    frame.Size                = UDim2.new(0, 140, 0, 34)
+    frame.Position            = UDim2.new(1, -148, 0, 10)
+    frame.BackgroundColor3    = Color3.fromRGB(15, 15, 20)
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel     = 0
+    frame.Active              = true
+    frame.Parent              = sg
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
 
     local bar = Instance.new("Frame")
-    bar.Size             = UDim2.new(0, 4, 0, 22)
-    bar.Position         = UDim2.new(0, 7, 0.5, -11)
-    bar.BackgroundColor3 = Color3.fromRGB(0, 200, 120)
+    bar.Size              = UDim2.new(0, 4, 0, 20)
+    bar.Position          = UDim2.new(0, 8, 0.5, -10)
+    bar.BackgroundColor3 = Color3.fromRGB(0, 220, 120)
     bar.BorderSizePixel  = 0
-    bar.Parent           = frame
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+    bar.Parent            = frame
+
+    local barCorner = Instance.new("UICorner")
+    barCorner.CornerRadius = UDim.new(1, 0)
+    barCorner.Parent = bar
 
     local lbl = Instance.new("TextLabel")
-    lbl.Size                   = UDim2.new(1, -18, 1, 0)
-    lbl.Position               = UDim2.new(0, 18, 0, 0)
+    lbl.Size                   = UDim2.new(1, -20, 1, 0)
+    lbl.Position               = UDim2.new(0, 20, 0, 0)
     lbl.BackgroundTransparency = 1
-    lbl.TextColor3             = Color3.fromRGB(230, 230, 230)
+    lbl.TextColor3             = Color3.fromRGB(240, 240, 240)
     lbl.Font                   = Enum.Font.GothamBold
-    lbl.TextSize               = 14
+    lbl.TextSize               = 13
     lbl.TextXAlignment         = Enum.TextXAlignment.Left
-    lbl.Text                   = "YingSeo FPS --"
+    lbl.Text                   = "YingSeo FPS: --"
     lbl.Parent                 = frame
 
-    local dragging, dragStart, startPos = false, nil, nil
+    -- Mouse / Touch Dragging Logic
+    local dragging = false
+    local dragStart, startPos
+
     frame.InputBegan:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1
-        or inp.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dragStart = inp.Position; startPos = frame.Position
-        end
-    end)
-    frame.InputEnded:Connect(function(inp)
-        if inp.UserInputType == Enum.UserInputType.MouseButton1
-        or inp.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-    UIS.InputChanged:Connect(function(inp)
-        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement
-                      or inp.UserInputType == Enum.UserInputType.Touch) then
-            local d = inp.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = inp.Position
+            startPos = frame.Position
+            inp.Changed:Connect(function()
+                if inp.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
         end
     end)
 
-    local samples, elapsed = 0, 0
-    local HI  = Color3.fromRGB(0,220,120)
-    local MID = Color3.fromRGB(255,200,0)
-    local LO  = Color3.fromRGB(255,60,60)
+    UIS.InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
+            local delta = inp.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    -- FPS Counter Loop
+    local frameCount = 0
+    local accTime = 0
+    local HI  = Color3.fromRGB(0, 220, 120)
+    local MID = Color3.fromRGB(255, 180, 0)
+    local LO  = Color3.fromRGB(255, 60, 60)
 
     Run.RenderStepped:Connect(function(dt)
-        samples += 1; elapsed += dt
-        if elapsed >= 0.5 then
-            local fps = math.round(samples/elapsed)
-            lbl.Text = "YingSeo FPS "..fps
-            bar.BackgroundColor3 = fps>=50 and HI or fps>=30 and MID or LO
-            samples, elapsed = 0, 0
+        frameCount += 1
+        accTime += dt
+        if accTime >= 0.5 then
+            local fps = math.round(frameCount / accTime)
+            lbl.Text = "YingSeo FPS: " .. tostring(fps)
+            bar.BackgroundColor3 = (fps >= 50 and HI) or (fps >= 30 and MID) or LO
+            frameCount = 0
+            accTime = 0
         end
     end)
 end)
 
--- ── PERF CAPS ────────────────────────────────────────────────
+-- ── PERFORMANCE CAPS ──────────────────────────────────────────
 pcall(function() setfpscap(480) end)
 pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
 
-print("[YingSeo] Loaded — Delta X / Blox Fruits")
+print("[MrDon] Client script loaded successfully.")
