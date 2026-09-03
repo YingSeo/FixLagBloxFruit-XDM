@@ -13,35 +13,18 @@ local queue = {}
 local head = 1
 local running = true
 
-local BATCH_SIZE = 25
-local DELAY = 0.02
-
-local protected = {}
-
-local function lower(v)
-    return string.lower(v or "")
-end
+local BATCH_SIZE = 150
 
 local function isProtectedModel(model)
     if not model or not model:IsA("Model") then
         return false
     end
 
-    local name = lower(model.Name)
+    local name = string.lower(model.Name)
 
     if name:find("boat", 1, true)
         or name:find("ship", 1, true)
-        or name:find("raft", 1, true)
-        or name:find("boat", 1, true) then
-        return true
-    end
-
-    if name == "enemies"
-        or name == "enemy"
-        or name == "npcs"
-        or name == "npc"
-        or name == "characters"
-        or name == "characters" then
+        or name:find("raft", 1, true) then
         return true
     end
 
@@ -56,109 +39,87 @@ local function isProtectedModel(model)
     return false
 end
 
-local function isPlayerCharacter(obj)
-    for _, p in ipairs(Players:GetPlayers()) do
-        local character = p.Character
-        if character and obj:IsDescendantOf(character) then
+local function isProtected(obj)
+    if player.Character and obj:IsDescendantOf(player.Character) then
+        return true
+    end
+
+    local current = obj
+
+    while current and current ~= map do
+        if current:IsA("Model") and isProtectedModel(current) then
             return true
         end
+
+        current = current.Parent
     end
 
     return false
 end
 
-local function hideObject(obj)
-    if not obj or not obj.Parent then
+local function optimize(obj)
+    if not obj or not obj.Parent or isProtected(obj) then
         return
     end
 
     if obj:IsA("BasePart") then
         obj.LocalTransparencyModifier = 1
         obj.CastShadow = false
-        return
-    end
 
-    if obj:IsA("Decal") or obj:IsA("Texture") then
+    elseif obj:IsA("Decal") or obj:IsA("Texture") then
         obj.Transparency = 1
-        return
-    end
 
-    if obj:IsA("ParticleEmitter")
+    elseif obj:IsA("ParticleEmitter")
         or obj:IsA("Trail")
         or obj:IsA("Beam")
         or obj:IsA("Smoke")
         or obj:IsA("Fire")
         or obj:IsA("Sparkles") then
         obj.Enabled = false
-        return
-    end
 
-    if obj:IsA("PointLight")
+    elseif obj:IsA("PointLight")
         or obj:IsA("SpotLight")
         or obj:IsA("SurfaceLight") then
         obj.Enabled = false
     end
 end
 
-local function addNode(obj, parentProtected)
-    if not obj or not obj.Parent then
-        return
-    end
-
-    local currentProtected = parentProtected
-
-    if not currentProtected and obj:IsA("Model") then
-        currentProtected = isProtectedModel(obj)
-    end
-
-    if isPlayerCharacter(obj) then
-        currentProtected = true
-    end
-
-    queue[#queue + 1] = {
-        object = obj,
-        protected = currentProtected
-    }
-end
-
 for _, obj in ipairs(map:GetChildren()) do
-    addNode(obj, false)
+    queue[#queue + 1] = obj
 end
-
-map.ChildAdded:Connect(function(obj)
-    if running then
-        addNode(obj, false)
-    end
-end)
 
 task.spawn(function()
     while running and head <= #queue do
-        local processed = 0
+        local endIndex = math.min(head + BATCH_SIZE - 1, #queue)
 
-        while processed < BATCH_SIZE and head <= #queue do
-            local item = queue[head]
-            head += 1
-            processed += 1
-
-            local obj = item.object
+        for i = head, endIndex do
+            local obj = queue[i]
 
             if obj and obj.Parent then
-                if not item.protected then
-                    hideObject(obj)
-                end
+                optimize(obj)
 
                 if obj:IsA("Folder") or obj:IsA("Model") then
                     for _, child in ipairs(obj:GetChildren()) do
-                        addNode(child, item.protected)
+                        queue[#queue + 1] = child
                     end
                 end
             end
         end
 
-        task.wait(DELAY)
+        head = endIndex + 1
+
+        if head <= #queue then
+            task.wait()
+        end
     end
 
     running = false
 end)
 
-print("Map optimizer started")
+map.ChildAdded:Connect(function(obj)
+    if running then
+        queue[#queue + 1] = obj
+    end
+end)
+
+print("Fast map optimizer started")
